@@ -59,7 +59,10 @@ def receive(
 def upload(
     path: Path = typer.Argument(
         ...,
-        help="The path to the file to initialize.",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        help="The local path of the file to upload.",
     ),
     file_id: str = typer.Argument(),
     verify_hash_onchain: bool = typer.Option(True),
@@ -198,7 +201,7 @@ def create(
         exists=True,
         file_okay=True,
         dir_okay=False,
-        help="The path to the file to initialize.",
+        help="The local path of the file to create.",
     ),
     encoding: FileEncodingSchemes = typer.Option(
         FileEncodingSchemes.base85,
