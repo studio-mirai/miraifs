@@ -1,12 +1,12 @@
 import base64
 import hashlib
-from pathlib import Path
-import zstandard as zstd
 import subprocess
+
+import zstandard as zstd
 
 
 def get_zstd_version():
-    result = subprocess.run(["zstd", "--version"], capture_output=True, text=True)
+    result = subprocess.run(["zstd", "--version"], capture_output=True, text=True, check=False)
     output = result.stdout.strip()
     return output
 
@@ -15,12 +15,13 @@ def encode_file(
     data: bytes,
     encoding: str,
 ) -> str:
-    """
-    Encode a file into a Base64 or Base85 string.
+    """Encode a file into a Base64 or Base85 string.
 
     Args:
+    ----
         data (bytes): The file data to encode.
         encoding (str): The encoding type to use (base64 or base85).
+
     """
     if encoding == "base64":
         file_bytes = base64.b64encode(data)

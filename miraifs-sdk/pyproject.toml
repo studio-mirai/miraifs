@@ -17,6 +17,9 @@ zstandard = "^0.22.0"
 [tool.poetry.scripts]
 mfs = "miraifs_sdk.cli:app"
 
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.4.8"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

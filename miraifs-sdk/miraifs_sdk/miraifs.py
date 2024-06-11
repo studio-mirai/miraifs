@@ -1,20 +1,20 @@
-import asyncio
-from miraifs_sdk.sui import Sui, GasCoin
 from pydantic import BaseModel
 from pysui import handle_result
+from pysui.sui.sui_builders.get_builders import GetDynamicFieldObject
 from pysui.sui.sui_txn.async_transaction import SuiTransactionAsync
+from pysui.sui.sui_txresults.complex_tx import TxResponse
+from pysui.sui.sui_txresults.single_tx import ObjectRead
 from pysui.sui.sui_types import (
     ObjectID,
-    SuiString,
     SuiAddress,
+    SuiBoolean,
+    SuiString,
     SuiU8,
     SuiU16,
-    SuiBoolean,
 )
-from pysui.sui.sui_builders.get_builders import GetDynamicFieldObject
+
 from miraifs_sdk import PACKAGE_ID
-from pysui.sui.sui_txresults.single_tx import ObjectRead, ObjectNotExist
-from pysui.sui.sui_txresults.complex_tx import TxResponse
+from miraifs_sdk.sui import GasCoin, Sui
 
 
 class File(BaseModel):
@@ -112,7 +112,7 @@ class MiraiFs(Sui):
             )
             return file
         else:
-            return
+            return None
 
     async def get_file_chunk(
         self,
@@ -161,7 +161,7 @@ class MiraiFs(Sui):
             await txer.execute(
                 gas_budget=10_000_000_000,
                 use_gas_object=gas_coin.id if gas_coin else None,
-            )
+            ),
         )
 
         if isinstance(result, TxResponse):
@@ -211,7 +211,7 @@ class MiraiFs(Sui):
         for obj in register_file_chunk_cap_objs:
             if type(obj) == ObjectRead:
                 register_file_chunk_caps.append(
-                    RegisterFileChunkCap(**obj.content.fields)
+                    RegisterFileChunkCap(**obj.content.fields),
                 )
 
         return register_file_chunk_caps
@@ -240,7 +240,7 @@ class MiraiFs(Sui):
             await txer.execute(
                 gas_budget=5_000_000_000,
                 use_gas_object=ObjectID(gas_coin.id) if gas_coin else None,
-            )
+            ),
         )
 
         return result
@@ -268,7 +268,7 @@ class MiraiFs(Sui):
         result = handle_result(
             await txer.execute(
                 use_gas_object=gas_coin.id if gas_coin else None,
-            )
+            ),
         )
 
         if isinstance(result, TxResponse):
@@ -333,14 +333,14 @@ class MiraiFs(Sui):
         await txer.transfer_objects(
             transfers=[file],
             recipient=SuiAddress(
-                "0x597996d64570b1ba7ec02376995fe126d4430d385a62970f33266d7eb711172f"
+                "0x597996d64570b1ba7ec02376995fe126d4430d385a62970f33266d7eb711172f",
             ),
         )
 
         result = handle_result(
             await txer.execute(
                 use_gas_object=gas_coin.id if gas_coin else None,
-            )
+            ),
         )
 
         return result

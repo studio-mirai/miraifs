@@ -1,25 +1,26 @@
+import base64
+import json
 import mimetypes
-import typer
+from hashlib import blake2b, md5
 from pathlib import Path
-from miraifs_sdk.miraifs import MiraiFs, FileUploadData, File, CreateFileChunkCap
+
+import trio
+import typer
+from pysui.sui.sui_txresults.complex_tx import TxResponse
+from rich import print
+from rich.progress import Progress, SpinnerColumn, TextColumn
+
+from miraifs_sdk import PACKAGE_ID
+from miraifs_sdk.miraifs import CreateFileChunkCap, FileUploadData, MiraiFs
 from miraifs_sdk.utils import (
     calculate_hash,
-    encode_file,
-    chunk_file_data,
-    split_lists_into_sublists,
-    decompress_data,
     calculate_hash_for_bytes,
+    chunk_file_data,
     compress_data,
+    decompress_data,
+    encode_file,
+    split_lists_into_sublists,
 )
-import base64
-from rich import print
-import trio
-from pysui.sui.sui_txresults.complex_tx import TxResponse
-import json
-from miraifs_sdk import PACKAGE_ID
-from rich.progress import Progress, SpinnerColumn, TextColumn
-from hashlib import blake2b, md5
-import zstandard as zstd
 
 app = typer.Typer()
 
@@ -35,7 +36,6 @@ def create_image_chunk_caps(
         file_id,
     )
     print(create_image_chunk_cap_ids)
-    return
 
 
 @app.command()
@@ -52,7 +52,6 @@ def receive(
         create_file_chunk_cap_ids,
     )
     print(result)
-    return
 
 
 @app.command()
@@ -149,8 +148,6 @@ def upload_chunks(
             print(f"Failed to create file chunk #{i}!")
             print(result.errors)
 
-    return
-
 
 @app.command()
 def register(
@@ -182,8 +179,6 @@ def register(
             file_id,
         )
         print(file)
-
-    return
 
 
 @app.command()
@@ -286,7 +281,7 @@ def initialize(
                     id=event_data["id"],
                     hash=event_data["hash"],
                     file_id=file.id,
-                )
+                ),
             )
 
         print("\nThe file below has been initialized successfully!")
@@ -299,8 +294,6 @@ def initialize(
     else:
         print("CRAP!")
 
-    return
-
 
 @app.command()
 def view(
@@ -311,7 +304,6 @@ def view(
         file_id,
     )
     print(file)
-    return
 
 
 @app.command()
