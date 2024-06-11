@@ -10,11 +10,13 @@ from pysui.sui.sui_types import (
     SuiString,
     SuiU8,
     SuiU16,
+    SuiU64,
 )
 from concurrent.futures import ThreadPoolExecutor
 
 from miraifs_sdk import PACKAGE_ID
 from miraifs_sdk.sui import GasCoin, Sui
+from rich import print
 
 
 class File(BaseModel):
@@ -56,6 +58,7 @@ class FileUploadData(BaseModel):
     encoding: str
     mime_type: str
     extension: str
+    size: int
     hash: str
     chunk_size: int
     sublist_size: int
@@ -75,6 +78,84 @@ class RegisterFileChunkCap(BaseModel):
 class MiraiFs(Sui):
     def __init__(self) -> None:
         super().__init__()
+
+    def create_file(
+        self,
+        upload_data: FileUploadData,
+        gas_coin: GasCoin | None = None,
+    ):
+        txer = SuiTransaction(
+            client=self.client,
+            compress_inputs=True,
+        )
+
+        if upload_data.compression_algorithm:
+            compression_algorithm_opt = txer.move_call(
+                target="0x1::option::some",
+                arguments=[SuiString(upload_data.compression_algorithm)],
+                type_arguments=["0x1::string::String"],
+            )
+        else:
+            compression_algorithm_opt = txer.move_call(
+                target="0x1::option::none",
+                arguments=[],
+                type_arguments=["0x1::string::String"],
+            )
+
+        if upload_data.compression_level:
+            compression_level_opt = txer.move_call(
+                target="0x1::option::some",
+                arguments=[SuiU8(upload_data.compression_level)],
+                type_arguments=["u8"],
+            )
+        else:
+            compression_level_opt = txer.move_call(
+                target="0x1::option::none",
+                arguments=[],
+                type_arguments=["u8"],
+            )
+
+        config = txer.move_call(
+            target=f"{PACKAGE_ID}::file::create_file_config",
+            arguments=[
+                SuiU8(upload_data.chunk_size),
+                SuiU16(upload_data.sublist_size),
+                compression_algorithm_opt,
+                compression_level_opt,
+            ],
+        )
+
+        file_chunk_hashes_vector = txer.make_move_vector(
+            items=[SuiString(hash) for hash in upload_data.chunk_hashes],
+            item_type="0x1::string::String",
+        )
+
+        file = txer.move_call(
+            target=f"{PACKAGE_ID}::file::create_file",
+            arguments=[
+                SuiString(upload_data.encoding),
+                SuiString(upload_data.mime_type),
+                SuiString(upload_data.extension),
+                SuiU64(upload_data.size),
+                SuiString(upload_data.hash),
+                config,
+                file_chunk_hashes_vector,
+                ObjectID("0x6"),
+            ],
+        )
+
+        txer.transfer_objects(
+            transfers=[file],
+            recipient=self.config.active_address,
+        )
+
+        result = handle_result(
+            txer.execute(
+                use_gas_object=gas_coin.id if gas_coin else None,
+            ),
+        )
+
+        return result
 
     def get_file(
         self,
@@ -273,67 +354,3 @@ class MiraiFs(Sui):
 
         if isinstance(result, TxResponse):
             return result
-
-    def create_file(
-        self,
-        upload_data: FileUploadData,
-        gas_coin: GasCoin | None = None,
-    ):
-        txer = SuiTransaction(
-            client=self.client,
-            compress_inputs=True,
-        )
-
-        file_chunk_hashes_vector = txer.make_move_vector(
-            items=[SuiString(hash) for hash in upload_data.chunk_hashes],
-            item_type="0x1::string::String",
-        )
-
-        if upload_data.compression_algorithm:
-            compression_algorithm_opt = txer.move_call(
-                target="0x1::option::some",
-                arguments=[SuiString(upload_data.compression_algorithm)],
-                type_arguments=["0x1::string::String"],
-            )
-        else:
-            compression_algorithm_opt = txer.move_call(
-                target="0x1::option::none",
-                arguments=[],
-                type_arguments=["0x1::string::String"],
-            )
-
-        if upload_data.compression_level:
-            compression_level_opt = txer.move_call(
-                target="0x1::option::some",
-                arguments=[SuiU8(upload_data.compression_level)],
-                type_arguments=["u8"],
-            )
-        else:
-            compression_level_opt = txer.move_call(
-                target="0x1::option::none",
-                arguments=[],
-                type_arguments=["u8"],
-            )
-
-        txer.move_call(
-            target=f"{PACKAGE_ID}::file::create_file",
-            arguments=[
-                SuiString(upload_data.encoding),
-                SuiString(upload_data.mime_type),
-                SuiString(upload_data.extension),
-                SuiString(upload_data.hash),
-                SuiU8(upload_data.chunk_size),
-                SuiU16(upload_data.sublist_size),
-                compression_algorithm_opt,
-                compression_level_opt,
-                file_chunk_hashes_vector,
-            ],
-        )
-
-        result = handle_result(
-            txer.execute(
-                use_gas_object=gas_coin.id if gas_coin else None,
-            ),
-        )
-
-        return result

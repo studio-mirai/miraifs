@@ -3,15 +3,14 @@ import json
 import mimetypes
 from hashlib import blake2b, md5
 from pathlib import Path
-
-import trio
+from enum import Enum
 import typer
 from pysui.sui.sui_txresults.complex_tx import TxResponse
 from rich import print
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from concurrent.futures import ThreadPoolExecutor
 from miraifs_sdk import PACKAGE_ID
-from miraifs_sdk.miraifs import CreateFileChunkCap, FileUploadData, MiraiFs
+from miraifs_sdk.miraifs import CreateFileChunkCap, FileUploadData, MiraiFs, FileChunk
 from miraifs_sdk.utils import (
     calculate_hash,
     calculate_hash_for_bytes,
@@ -22,9 +21,15 @@ from miraifs_sdk.utils import (
     split_lists_into_sublists,
 )
 
+
 app = typer.Typer()
 
 mfs = MiraiFs()
+
+
+class FileEncodingSchemes(str, Enum):
+    base64 = "base64"
+    base85 = "base85"
 
 
 @app.command()
@@ -51,7 +56,7 @@ def receive(
 
 
 @app.command()
-def upload_chunks(
+def upload(
     path: Path = typer.Argument(
         ...,
         help="The path to the file to initialize.",
@@ -131,7 +136,9 @@ def upload_chunks(
     gas_coins = mfs.request_gas_coins(len(create_file_chunk_caps), 5)
     print("\nFinding gas coins...")
     print(gas_coins)
-    with ThreadPoolExecutor(max_workers=16) as executor:
+    with ThreadPoolExecutor(
+        max_workers=min(len(create_file_chunk_caps), 16)
+    ) as executor:
         futures = []
         for i, create_file_chunk_cap in enumerate(create_file_chunk_caps):
             future = executor.submit(
@@ -143,14 +150,23 @@ def upload_chunks(
             )
             futures.append(future)
 
-        for future in futures:
-            result = future.result()  # Wait for the task to complete and get the result
-            print(result.effects.status)
-            # if len(result.errors) == 0:
-            #     print(f"Created file chunk #{i}: {result.effects.transaction_digest}!")
-            # else:
-            #     print(f"Failed to create file chunk #{i}!")
-            #     print(result.errors)
+    file_chunk_ids: list[FileChunk] = []
+
+    for future in futures:
+        result = future.result()  # Wait for the task to complete and get the result
+        # print(result.effects.status, result.effects.transaction_digest)
+        if isinstance(result, TxResponse):
+            if len(result.errors) == 0:
+                print(f"SUCCESS: {result.effects.transaction_digest}!")  # fmt: skip
+                for event in result.events:
+                    if event.event_type == f"{PACKAGE_ID}::file::FileChunkCreatedEvent":  # fmt: skip
+                        event_json = json.loads(event.parsed_json.replace("'", '"'))
+                        file_chunk_ids.append(event_json["id"])
+            else:
+                print(f"FAILED: {result.effects.transaction_digest}!")
+
+    print("\nFile chunks created successfully!")
+    print(file_chunk_ids)
 
 
 @app.command()
@@ -176,26 +192,45 @@ def register(
 
 
 @app.command()
-def initialize(
+def create(
     path: Path = typer.Argument(
         ...,
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
         help="The path to the file to initialize.",
     ),
-    encoding: str = typer.Option(
-        "base64",
+    encoding: FileEncodingSchemes = typer.Option(
+        FileEncodingSchemes.base85,
         help="The encoding type to use for the file (b64 or base85).",
     ),
     confirm: bool = typer.Option(
         False,
         help="Confirm file upload details are correct.",
     ),
-    compression: int = typer.Option(9),
-    chunk_size: int = typer.Option(220),
-    sublist_size: int = typer.Option(511),
+    compression: int = typer.Option(
+        9,
+        min=1,
+        max=22,
+        help="The zstd compression level to use.",
+    ),
+    chunk_size: int = typer.Option(
+        230,
+        min=1,
+        max=230,
+        help="The size of each file chunk.",
+    ),
+    sublist_size: int = typer.Option(
+        511,
+        min=1,
+        max=511,
+        help="The size of each sublist.",
+    ),
 ):
-    if encoding not in ["base64", "base85"]:
-        raise typer.Exit("Invalid encoding type.")
-
+    """
+    Initialize a file upload by creating a MiraiFS `File` object
+    that contains file metadata and the expected file chunk hashes.
+    """
     with open(path, "rb") as f:
         data = f.read()
 
@@ -211,7 +246,7 @@ def initialize(
             # Overwrite data_to_upload with compressed data.
             data_to_upload = compressed_data
 
-    file_data = encode_file(data_to_upload, encoding)
+    file_data = encode_file(data_to_upload, encoding.value)
     file_size_bytes = len(file_data)
     file_chunks = chunk_file_data(file_data, chunk_size)
     file_chunks_sublists = split_lists_into_sublists(file_chunks, sublist_size)
@@ -224,9 +259,10 @@ def initialize(
     extension = path.suffix.lower().replace(".", "")
 
     file_upload_data = FileUploadData(
-        encoding=encoding,
+        encoding=encoding.value,
         mime_type=mime_type,
         extension=extension,
+        size=file_size_bytes,
         hash=original_file_hash,
         chunk_size=chunk_size,
         sublist_size=sublist_size,
@@ -284,7 +320,7 @@ def initialize(
         print(f"\n{json.dumps([c.model_dump() for c in create_file_chunk_caps], indent=4)}")  # fmt: skip
 
         print("\nUpload file chunks with the command below!")
-        print(f"\nmfs upload-chunks {path} {file.id}")
+        print(f"\nmfs upload {path} {file.id}")
     else:
         print("CRAP!")
 

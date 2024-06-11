@@ -2,6 +2,7 @@ module miraifs::file {
 
     use std::string::{String, utf8};
 
+    use sui::clock::{Clock};
     use sui::dynamic_field::{Self as df};
     use sui::event;
     use sui::hash::{blake2b256};
@@ -14,12 +15,14 @@ module miraifs::file {
     const EFilePromiseMismatch: u64 = 2;
     const EFileChunksNotDeleted: u64 = 3;
 
-    public struct File has key {
+    public struct File has key, store {
         id: UID,
         name: Option<String>,
         encoding: String,
         mime_type: String,
         extension: String,
+        size: u64,
+        created_at_ts: u64,
         hash: String,
         config: FileConfig,
         chunks: VecMap<String, Option<ID>>,
@@ -76,27 +79,21 @@ module miraifs::file {
         encoding: String,
         mime_type: String,
         extension: String,
+        size: u64,
         hash: String,
-        chunk_size: u8,
-        sublist_size: u16,
-        compression_algorithm: Option<String>,
-        compression_level: Option<u8>,
+        config: FileConfig,
         mut file_chunk_hashes: vector<String>,
+        clock: &Clock,
         ctx: &mut TxContext,
-    ) {
-        let config = FileConfig {
-            chunk_size: chunk_size,
-            sublist_size: sublist_size,
-            compression_algorithm: compression_algorithm,
-            compression_level: compression_level,
-        };
-
+    ): File {
         let mut file = File {
             id: object::new(ctx),
             name: option::none(),
             encoding: encoding,
             mime_type: mime_type,
             extension: extension,
+            size: size,
+            created_at_ts: clock.timestamp_ms(),
             hash: hash,
             config: config,
             chunks: vec_map::empty(),
@@ -141,7 +138,23 @@ module miraifs::file {
             }
         );
 
-        transfer::transfer(file, ctx.sender());
+        file
+    }
+
+    public fun create_file_config(
+        chunk_size: u8,
+        sublist_size: u16,
+        compression_algorithm: Option<String>,
+        compression_level: Option<u8>,
+    ): FileConfig {
+        let config = FileConfig {
+            chunk_size: chunk_size,
+            sublist_size: sublist_size,
+            compression_algorithm: compression_algorithm,
+            compression_level: compression_level,
+        };
+
+        config
     }
 
     public fun delete_file(
@@ -157,6 +170,8 @@ module miraifs::file {
             encoding: _,
             mime_type: _,
             extension: _,
+            size: _,
+            created_at_ts: _,
             hash: _,
             config: _,
             chunks,
