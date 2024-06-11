@@ -1,17 +1,17 @@
 from pydantic import BaseModel
 from pysui import handle_result
 from pysui.sui.sui_builders.get_builders import GetDynamicFieldObject
-from pysui.sui.sui_txn.async_transaction import SuiTransactionAsync
+from pysui.sui.sui_txn.sync_transaction import SuiTransaction
 from pysui.sui.sui_txresults.complex_tx import TxResponse
 from pysui.sui.sui_txresults.single_tx import ObjectRead
 from pysui.sui.sui_types import (
     ObjectID,
-    SuiAddress,
     SuiBoolean,
     SuiString,
     SuiU8,
     SuiU16,
 )
+from concurrent.futures import ThreadPoolExecutor
 
 from miraifs_sdk import PACKAGE_ID
 from miraifs_sdk.sui import GasCoin, Sui
@@ -76,12 +76,12 @@ class MiraiFs(Sui):
     def __init__(self) -> None:
         super().__init__()
 
-    async def get_file(
+    def get_file(
         self,
         file_id: str,
     ) -> File:
         result = handle_result(
-            await self.client.get_object(ObjectID(file_id)),
+            self.client.get_object(ObjectID(file_id)),
         )
         if isinstance(result, ObjectRead):
             fields = result.content.fields
@@ -114,12 +114,12 @@ class MiraiFs(Sui):
         else:
             return None
 
-    async def get_file_chunk(
+    def get_file_chunk(
         self,
         id: str,
     ):
         result = handle_result(
-            await self.client.get_object(ObjectID(id)),
+            self.client.get_object(ObjectID(id)),
         )
 
         if isinstance(result, ObjectRead):
@@ -131,24 +131,24 @@ class MiraiFs(Sui):
 
         return file_chunk
 
-    async def create_file_chunk(
+    def create_file_chunk(
         self,
         create_file_chunk_cap: CreateFileChunkCap,
         chunk: list[str],
         verify_hash_onchain: bool,
         gas_coin: GasCoin | None = None,
     ) -> TxResponse:
-        txer = SuiTransactionAsync(
+        txer = SuiTransaction(
             client=self.client,
             compress_inputs=True,
         )
 
-        chunk_vector = await txer.make_move_vector(
+        chunk_vector = txer.make_move_vector(
             items=[SuiString(subchunk) for subchunk in chunk],
             item_type="0x1::string::String",
         )
 
-        await txer.move_call(
+        txer.move_call(
             target=f"{PACKAGE_ID}::file::create_file_chunk",
             arguments=[
                 ObjectID(create_file_chunk_cap.id),
@@ -158,8 +158,8 @@ class MiraiFs(Sui):
         )
 
         result = handle_result(
-            await txer.execute(
-                gas_budget=10_000_000_000,
+            txer.execute(
+                gas_budget=5_000_000_000,
                 use_gas_object=gas_coin.id if gas_coin else None,
             ),
         )
@@ -167,7 +167,7 @@ class MiraiFs(Sui):
         if isinstance(result, TxResponse):
             return result
 
-    async def get_create_image_chunk_cap_ids_for_file(
+    def get_create_image_chunk_cap_ids_for_file(
         self,
         file_id: str,
     ) -> list[str]:
@@ -175,18 +175,18 @@ class MiraiFs(Sui):
             parent_object_id=ObjectID(file_id),
             name={"type": "0x1::string::String", "value": "create_file_chunk_cap_ids"},
         )
-        result = handle_result(await self.client.execute(builder))
+        result = handle_result(self.client.execute(builder))
         if isinstance(result, ObjectRead):
             return result.content.fields["value"]["fields"]["contents"]
         else:
             raise Exception("Failed to get create file chunk cap ids.")
 
-    async def get_create_image_chunk_cap(
+    def get_create_image_chunk_cap(
         self,
         object_id: str,
     ) -> CreateFileChunkCap:
         result = handle_result(
-            await self.client.get_object(ObjectID(object_id)),
+            self.client.get_object(ObjectID(object_id)),
         )
 
         if isinstance(result, ObjectRead):
@@ -196,11 +196,11 @@ class MiraiFs(Sui):
                 file_id=result.content.fields["file_id"],
             )
 
-    async def get_register_file_chunk_caps_for_file(
+    def get_register_file_chunk_caps_for_file(
         self,
         file_id: str,
     ):
-        register_file_chunk_cap_objs = await self.get_owned_objects(
+        register_file_chunk_cap_objs = self.get_owned_objects(
             address=file_id,
             struct_type=f"{PACKAGE_ID}::file::RegisterFileChunkCap",
             show_content=True,
@@ -216,19 +216,19 @@ class MiraiFs(Sui):
 
         return register_file_chunk_caps
 
-    async def receive_and_register_file_chunks(
+    def receive_and_register_file_chunks(
         self,
         file: File,
         register_file_chunk_caps: list[RegisterFileChunkCap],
         gas_coin: GasCoin | None = None,
     ):
-        txer = SuiTransactionAsync(
+        txer = SuiTransaction(
             client=self.client,
             compress_inputs=True,
         )
 
         for cap in register_file_chunk_caps:
-            await txer.move_call(
+            txer.move_call(
                 target=f"{PACKAGE_ID}::file::receive_and_register_file_chunk",
                 arguments=[
                     ObjectID(file.id),
@@ -237,27 +237,27 @@ class MiraiFs(Sui):
             )
 
         result = handle_result(
-            await txer.execute(
-                gas_budget=5_000_000_000,
+            txer.execute(
+                gas_budget=2_500_000_000,
                 use_gas_object=ObjectID(gas_coin.id) if gas_coin else None,
             ),
         )
 
         return result
 
-    async def receive_create_file_chunk_caps(
+    def receive_create_file_chunk_caps(
         self,
         file_id: str,
         create_file_chunk_caps: list[CreateFileChunkCap],
         gas_coin: GasCoin | None = None,
     ) -> TxResponse:
-        txer = SuiTransactionAsync(
+        txer = SuiTransaction(
             client=self.client,
             compress_inputs=True,
         )
 
         for create_file_chunk_cap in create_file_chunk_caps:
-            await txer.move_call(
+            txer.move_call(
                 target=f"{PACKAGE_ID}::file::receive_create_file_chunk_cap",
                 arguments=[
                     ObjectID(file_id),
@@ -266,7 +266,7 @@ class MiraiFs(Sui):
             )
 
         result = handle_result(
-            await txer.execute(
+            txer.execute(
                 use_gas_object=gas_coin.id if gas_coin else None,
             ),
         )
@@ -274,49 +274,49 @@ class MiraiFs(Sui):
         if isinstance(result, TxResponse):
             return result
 
-    async def initialize_file(
+    def create_file(
         self,
         upload_data: FileUploadData,
         gas_coin: GasCoin | None = None,
     ):
-        txer = SuiTransactionAsync(
+        txer = SuiTransaction(
             client=self.client,
             compress_inputs=True,
         )
 
-        file_chunk_hashes_vector = await txer.make_move_vector(
+        file_chunk_hashes_vector = txer.make_move_vector(
             items=[SuiString(hash) for hash in upload_data.chunk_hashes],
             item_type="0x1::string::String",
         )
 
         if upload_data.compression_algorithm:
-            compression_algorithm_opt = await txer.move_call(
+            compression_algorithm_opt = txer.move_call(
                 target="0x1::option::some",
                 arguments=[SuiString(upload_data.compression_algorithm)],
                 type_arguments=["0x1::string::String"],
             )
         else:
-            compression_algorithm_opt = await txer.move_call(
+            compression_algorithm_opt = txer.move_call(
                 target="0x1::option::none",
                 arguments=[],
                 type_arguments=["0x1::string::String"],
             )
 
         if upload_data.compression_level:
-            compression_level_opt = await txer.move_call(
+            compression_level_opt = txer.move_call(
                 target="0x1::option::some",
                 arguments=[SuiU8(upload_data.compression_level)],
                 type_arguments=["u8"],
             )
         else:
-            compression_level_opt = await txer.move_call(
+            compression_level_opt = txer.move_call(
                 target="0x1::option::none",
                 arguments=[],
                 type_arguments=["u8"],
             )
 
-        file = await txer.move_call(
-            target=f"{PACKAGE_ID}::file::initialize_file",
+        txer.move_call(
+            target=f"{PACKAGE_ID}::file::create_file",
             arguments=[
                 SuiString(upload_data.encoding),
                 SuiString(upload_data.mime_type),
@@ -330,15 +330,8 @@ class MiraiFs(Sui):
             ],
         )
 
-        await txer.transfer_objects(
-            transfers=[file],
-            recipient=SuiAddress(
-                "0x597996d64570b1ba7ec02376995fe126d4430d385a62970f33266d7eb711172f",
-            ),
-        )
-
         result = handle_result(
-            await txer.execute(
+            txer.execute(
                 use_gas_object=gas_coin.id if gas_coin else None,
             ),
         )

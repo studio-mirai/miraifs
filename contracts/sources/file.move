@@ -1,24 +1,20 @@
 module miraifs::file {
 
-    use std::option::{Self, Option};
-    use std::string::{Self, String, utf8};
-    use std::vector::{Self};
+    use std::string::{String, utf8};
 
-    use sui::display::{Self};
     use sui::dynamic_field::{Self as df};
     use sui::event;
-    use sui::hash::{Self, blake2b256};
+    use sui::hash::{blake2b256};
     use sui::hex::{Self};
-    use sui::object::{Self, ID, UID};
-    use sui::package::{Self};
-    use sui::transfer::{Self, Receiving};
-    use sui::tx_context::{TxContext};
+    use sui::transfer::{Receiving};
     use sui::vec_map::{Self, VecMap};
     use sui::vec_set::{Self, VecSet};
 
     const EHashMismatch: u64 = 1;
+    const EFilePromiseMismatch: u64 = 2;
+    const EFileChunksNotDeleted: u64 = 3;
 
-    public struct File has key, store {
+    public struct File has key {
         id: UID,
         name: Option<String>,
         encoding: String,
@@ -29,7 +25,7 @@ module miraifs::file {
         chunks: VecMap<String, Option<ID>>,
     }
 
-    public struct FileConfig has store {
+    public struct FileConfig has drop, store {
         chunk_size: u8,
         sublist_size: u16,
         compression_algorithm: Option<String>,
@@ -37,12 +33,6 @@ module miraifs::file {
     }
 
     public struct FileChunk has key, store {
-        id: UID,
-        hash: String,
-        data: vector<String>,
-    }
-
-    public struct FileChunkTest has key, store {
         id: UID,
         hash: String,
         data: vector<String>,
@@ -76,24 +66,13 @@ module miraifs::file {
         id: ID,
         file_id: ID,
         hash: String,
-        index: u64,
     }
 
-    public fun create_file_chunk_test(
-        data: vector<String>,
-        hash: String,
-        ctx: &mut TxContext,
-    ) {
-        let chunk = FileChunkTest {
-            id: object::new(ctx),
-            hash: hash,
-            data: data,
-        };
-
-        transfer::transfer(chunk, ctx.sender());
+    public struct DeleteFilePromise {
+        file_id: ID,
     }
 
-    public fun initialize_file(
+    public fun create_file(
         encoding: String,
         mime_type: String,
         extension: String,
@@ -104,7 +83,7 @@ module miraifs::file {
         compression_level: Option<u8>,
         mut file_chunk_hashes: vector<String>,
         ctx: &mut TxContext,
-    ): File {
+    ) {
         let config = FileConfig {
             chunk_size: chunk_size,
             sublist_size: sublist_size,
@@ -162,7 +141,31 @@ module miraifs::file {
             }
         );
 
-        file
+        transfer::transfer(file, ctx.sender());
+    }
+
+    public fun delete_file(
+        file: File,
+        promise: DeleteFilePromise,
+    ) {
+        assert!(object::id(&file) == promise.file_id, EFilePromiseMismatch);
+        assert!(file.chunks.is_empty(), EFileChunksNotDeleted);
+
+        let File {
+            id,
+            name: _,
+            encoding: _,
+            mime_type: _,
+            extension: _,
+            hash: _,
+            config: _,
+            chunks,
+        } = file;
+
+        chunks.destroy_empty();
+        id.delete();
+
+        let DeleteFilePromise { file_id: _, } = promise;
     }
 
     public fun create_file_chunk(
@@ -189,6 +192,14 @@ module miraifs::file {
             data: data,
         };
 
+        event::emit(
+            FileChunkCreatedEvent {
+                id: object::id(&file_chunk),
+                file_id: cap.file_id,
+                hash: file_chunk_hash,
+            }
+        );
+
         let register_file_chunk_cap = RegisterFileChunkCap {
             id: object::new(ctx),
             file_id: cap.file_id,
@@ -209,20 +220,7 @@ module miraifs::file {
         id.delete();
     }
 
-    public fun receive_create_file_chunk_cap(
-        file: &mut File,
-        cap_to_receive: Receiving<CreateFileChunkCap>,
-        ctx: &mut TxContext,
-    ) {
-        let cap = transfer::receive(
-            &mut file.id,
-            cap_to_receive,
-        );
-
-        transfer::transfer(cap, ctx.sender());
-    }
-
-    public fun receive_and_register_file_chunk(
+    public fun register_file_chunk(
         file: &mut File,
         cap_to_receive: Receiving<RegisterFileChunkCap>,
     ) {
@@ -260,6 +258,19 @@ module miraifs::file {
         id.delete()
     }
 
+    public fun receive_create_file_chunk_cap(
+        file: &mut File,
+        cap_to_receive: Receiving<CreateFileChunkCap>,
+        ctx: &mut TxContext,
+    ) {
+        let cap = transfer::receive(
+            &mut file.id,
+            cap_to_receive,
+        );
+
+        transfer::transfer(cap, ctx.sender());
+    }
+
     fun calculate_hash_for_string(
         str: String,
     ): String {
@@ -275,7 +286,7 @@ module miraifs::file {
         let mut result_str = utf8(b"");
 
         while (!data.is_empty()) {
-            string::append(&mut result_str, data.remove(0));
+            result_str.append(data.remove(0));
         };
 
         result_str

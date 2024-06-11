@@ -9,7 +9,7 @@ import typer
 from pysui.sui.sui_txresults.complex_tx import TxResponse
 from rich import print
 from rich.progress import Progress, SpinnerColumn, TextColumn
-
+from concurrent.futures import ThreadPoolExecutor
 from miraifs_sdk import PACKAGE_ID
 from miraifs_sdk.miraifs import CreateFileChunkCap, FileUploadData, MiraiFs
 from miraifs_sdk.utils import (
@@ -31,10 +31,7 @@ mfs = MiraiFs()
 def create_image_chunk_caps(
     file_id: str = typer.Argument(...),
 ):
-    create_image_chunk_cap_ids = trio.run(
-        mfs.get_create_image_chunk_cap_ids_for_file,
-        file_id,
-    )
+    create_image_chunk_cap_ids = mfs.get_create_image_chunk_cap_ids_for_file(file_id)
     print(create_image_chunk_cap_ids)
 
 
@@ -42,16 +39,15 @@ def create_image_chunk_caps(
 def receive(
     file_id: str = typer.Argument(...),
 ):
-    create_file_chunk_cap_ids = trio.run(
-        mfs.get_create_image_chunk_cap_ids_for_file,
+    create_file_chunk_cap_ids = mfs.get_create_image_chunk_cap_ids_for_file(
         file_id,
     )
-    result = trio.run(
-        mfs.receive_create_file_chunk_caps,
+    result = mfs.receive_create_file_chunk_caps(
         file_id,
         create_file_chunk_cap_ids,
     )
     print(result)
+    return
 
 
 @app.command()
@@ -70,7 +66,7 @@ def upload_chunks(
 
     data_to_upload = data
 
-    onchain_file = trio.run(mfs.get_file, file_id)
+    onchain_file = mfs.get_file(file_id)
     local_file_hash = calculate_hash_for_bytes(data)
 
     if onchain_file.config.compression_algorithm == "zstd":
@@ -100,25 +96,22 @@ def upload_chunks(
     if local_chunks_hash != onchain_chunks_hash:
         raise typer.Exit("Onchain chunk hashes do not match local chunk hashes.")
 
-    create_file_chunk_cap_ids = trio.run(
-        mfs.get_create_image_chunk_cap_ids_for_file,
-        onchain_file.id,
+    create_file_chunk_cap_ids = mfs.get_create_image_chunk_cap_ids_for_file(
+        onchain_file.id
     )
 
     create_file_chunk_caps = [
-        trio.run(mfs.get_create_image_chunk_cap, cap_id)
-        for cap_id in create_file_chunk_cap_ids
+        mfs.get_create_image_chunk_cap(cap_id) for cap_id in create_file_chunk_cap_ids
     ]
 
     for create_file_chunk_cap in create_file_chunk_caps:
-        owner = trio.run(mfs.get_owner_address, create_file_chunk_cap.id)
+        owner = mfs.get_owner_address(create_file_chunk_cap.id)
         if owner == onchain_file.id:
             typer.confirm(
                 text="CreateFileChunkCap objects are owned by the parent file. Would you like to receive them now?",
                 abort=True,
             )
-            result = trio.run(
-                mfs.receive_create_file_chunk_caps,
+            result = mfs.receive_create_file_chunk_caps(
                 file_id,
                 create_file_chunk_caps,
             )
@@ -135,49 +128,50 @@ def upload_chunks(
         for sublist in file_chunks_sublists
     }
 
-    for i, create_file_chunk_cap in enumerate(create_file_chunk_caps):
-        result = trio.run(
-            mfs.create_file_chunk,
-            create_file_chunk_cap,
-            file_chunks_by_hash[create_file_chunk_cap.hash],
-            verify_hash_onchain,
-        )
-        if len(result.errors) == 0:
-            print(f"Created file chunk #{i}: {result.effects.transaction_digest}!")
-        else:
-            print(f"Failed to create file chunk #{i}!")
-            print(result.errors)
+    gas_coins = mfs.request_gas_coins(len(create_file_chunk_caps), 5)
+    print("\nFinding gas coins...")
+    print(gas_coins)
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        futures = []
+        for i, create_file_chunk_cap in enumerate(create_file_chunk_caps):
+            future = executor.submit(
+                mfs.create_file_chunk,
+                create_file_chunk_cap,
+                file_chunks_by_hash[create_file_chunk_cap.hash],
+                verify_hash_onchain,
+                gas_coin=gas_coins[i],
+            )
+            futures.append(future)
+
+        for future in futures:
+            result = future.result()  # Wait for the task to complete and get the result
+            print(result.effects.status)
+            # if len(result.errors) == 0:
+            #     print(f"Created file chunk #{i}: {result.effects.transaction_digest}!")
+            # else:
+            #     print(f"Failed to create file chunk #{i}!")
+            #     print(result.errors)
 
 
 @app.command()
 def register(
     file_id: str = typer.Argument(...),
 ):
-    file = trio.run(
-        mfs.get_file,
-        file_id,
-    )
+    file = mfs.get_file(file_id)
 
-    register_file_chunk_caps = trio.run(
-        mfs.get_register_file_chunk_caps_for_file,
-        file_id,
-    )
+    register_file_chunk_caps = mfs.get_register_file_chunk_caps_for_file(file.id)
 
     if len(register_file_chunk_caps) == 0:
         raise typer.Exit("No RegisterFileChunkCap objects found for this file.")
 
-    result = trio.run(
-        mfs.receive_and_register_file_chunks,
+    result = mfs.receive_and_register_file_chunks(
         file,
         register_file_chunk_caps,
     )
 
     if len(result.errors) == 0:
         print(f"Successfully registered file chunks for {file.id}!")
-        file = trio.run(
-            mfs.get_file,
-            file_id,
-        )
+        file = mfs.get_file(file_id)
         print(file)
 
 
@@ -257,7 +251,7 @@ def initialize(
         transient=True,
     ) as progress:
         progress.add_task(description="Broadcasting transaction...", total=2)
-        result = trio.run(mfs.initialize_file, file_upload_data)
+        result = mfs.create_file(file_upload_data)
         print(result)
 
     if isinstance(result, TxResponse):
@@ -271,7 +265,7 @@ def initialize(
             if event.event_type == f"{PACKAGE_ID}::file::CreateFileChunkCapCreatedEvent":  # fmt: skip
                 create_file_chunk_cap_created_event_data.append(event_data)
 
-        file = trio.run(mfs.get_file, file_created_event_data["id"])
+        file = mfs.get_file(file_created_event_data["id"])
         print(file)
 
         create_file_chunk_caps: list[CreateFileChunkCap] = []
@@ -299,10 +293,7 @@ def initialize(
 def view(
     file_id: str = typer.Argument(...),
 ):
-    file = trio.run(
-        mfs.get_file,
-        file_id,
-    )
+    file = mfs.get_file(file_id)
     print(file)
 
 
@@ -311,10 +302,7 @@ def download(
     file_id: str = typer.Argument(...),
 ):
     print(f"Fetching file {file_id}...")
-    file = trio.run(
-        mfs.get_file,
-        file_id,
-    )
+    file = mfs.get_file(file_id)
     print(file)
 
     file_chunk_ids = [chunk.value for chunk in file.chunks]
@@ -322,10 +310,7 @@ def download(
 
     chunk_strings: list[str] = []
     for file_chunk_id in file_chunk_ids:
-        result = trio.run(
-            mfs.get_file_chunk,
-            file_chunk_id,
-        )
+        result = mfs.get_file_chunk(file_chunk_id)
         chunk_strings.append("".join(result.data))
 
     print("Reconstructing file from chunks...")
@@ -353,3 +338,13 @@ def download(
     with open(f"./downloads/{file.id}.{file.extension}", "wb") as f:
         print(f"Saving file to ./downloads/{file.id}.{file.extension}")
         f.write(data)
+
+
+@app.command()
+def split_gas(
+    quantity: int = typer.Argument(...),
+    value: int = typer.Argument(...),
+):
+    result = mfs.request_gas_coins(quantity, value)
+    print(result)
+    return
