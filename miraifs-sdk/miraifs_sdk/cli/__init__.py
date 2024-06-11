@@ -7,10 +7,11 @@ from enum import Enum
 import typer
 from pysui.sui.sui_txresults.complex_tx import TxResponse
 from rich import print
+from miraifs_sdk.miraifs import MiraiFs
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from concurrent.futures import ThreadPoolExecutor
 from miraifs_sdk import PACKAGE_ID
-from miraifs_sdk.miraifs import CreateFileChunkCap, FileUploadData, MiraiFs, FileChunk
+from miraifs_sdk.models import MfsCreateFileChunkCap, MfsFileUploadData, MfsFileChunk
 from miraifs_sdk.utils import (
     calculate_hash,
     calculate_hash_for_bytes,
@@ -153,7 +154,7 @@ def upload(
             )
             futures.append(future)
 
-    file_chunk_ids: list[FileChunk] = []
+    file_chunk_ids: list[MfsFileChunk] = []
 
     for future in futures:
         result = future.result()  # Wait for the task to complete and get the result
@@ -261,7 +262,7 @@ def create(
     mime_type, _ = mimetypes.guess_type(path)
     extension = path.suffix.lower().replace(".", "")
 
-    file_upload_data = FileUploadData(
+    file_upload_data = MfsFileUploadData(
         encoding=encoding.value,
         mime_type=mime_type,
         extension=extension,
@@ -307,10 +308,10 @@ def create(
         file = mfs.get_file(file_created_event_data["id"])
         print(file)
 
-        create_file_chunk_caps: list[CreateFileChunkCap] = []
+        create_file_chunk_caps: list[MfsCreateFileChunkCap] = []
         for event_data in create_file_chunk_cap_created_event_data:
             create_file_chunk_caps.append(
-                CreateFileChunkCap(
+                MfsCreateFileChunkCap(
                     id=event_data["id"],
                     hash=event_data["hash"],
                     file_id=file.id,
@@ -332,8 +333,7 @@ def create(
 def view(
     file_id: str = typer.Argument(...),
 ):
-    file = mfs.get_file(file_id)
-    print(file)
+    file = mfs.File(file_id)
 
 
 @app.command()

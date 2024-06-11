@@ -1,42 +1,42 @@
 from pydantic import BaseModel
 
 
-class File(BaseModel):
+class MfsFile(BaseModel):
     id: str
     name: str | None = None
     encoding: str
     mime_type: str
     extension: str
     hash: str
-    config: "FileConfig"
-    chunks: list["FileChunkMapping"]
+    config: "MfsFileConfig"
+    chunks: list["MfsFileChunkMapping"]
 
 
-class FileConfig(BaseModel):
+class MfsFileConfig(BaseModel):
     chunk_size: int
     sublist_size: int
     compression_algorithm: str | None = None
     compression_level: int | None = None
 
 
-class FileChunk(BaseModel):
+class MfsFileChunk(BaseModel):
     id: str
     hash: str
     data: list[str]
 
 
-class CreateFileChunkCap(BaseModel):
+class MfsCreateFileChunkCap(BaseModel):
     id: str
     hash: str
     file_id: str
 
 
-class FileChunkMapping(BaseModel):
+class MfsFileChunkMapping(BaseModel):
     key: str
     value: str | None = None
 
 
-class FileUploadData(BaseModel):
+class MfsFileUploadData(BaseModel):
     encoding: str
     mime_type: str
     extension: str
@@ -49,7 +49,7 @@ class FileUploadData(BaseModel):
     chunk_hashes: list[str]
 
 
-class RegisterFileChunkCap(BaseModel):
+class MfsRegisterFileChunkCap(BaseModel):
     id: str
     file_id: str
     chunk_id: str

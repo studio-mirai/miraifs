@@ -1,5 +1,4 @@
 from typing_extensions import Unpack
-from miraifs_sdk.txb import create_file
 from miraifs_sdk.miraifs import MiraiFs
 from pydantic import ConfigDict
 from pysui import handle_result
@@ -21,18 +20,18 @@ from miraifs_sdk.exceptions import FileNotFoundError
 from miraifs_sdk import PACKAGE_ID
 from miraifs_sdk.sui import GasCoin, Sui
 from miraifs_sdk.models import (
-    FileUploadData,
-    File,
-    FileChunk,
-    FileConfig,
-    FileChunkMapping,
-    CreateFileChunkCap,
-    RegisterFileChunkCap,
+    MfsFileUploadData,
+    MfsFile,
+    MfsFileChunk,
+    MfsFileConfig,
+    MfsFileChunkMapping,
+    MfsCreateFileChunkCap,
+    MfsRegisterFileChunkCap,
 )
 from miraifs_sdk.miraifs.file import MfsFile
 
 
-class MfsFileChunk(MfsFile):
+class FileChunk(MfsFile):
     def __init__(
         self,
         file_id: str,
@@ -44,7 +43,7 @@ class MfsFileChunk(MfsFile):
 
     def create(
         self,
-        create_file_chunk_cap: CreateFileChunkCap,
+        create_file_chunk_cap: MfsCreateFileChunkCap,
         chunk: list[str],
         verify_hash_onchain: bool,
         gas_coin: GasCoin | None = None,
@@ -80,7 +79,7 @@ class MfsFileChunk(MfsFile):
 
     def view(
         self,
-    ) -> FileChunk:
+    ) -> MfsFileChunk:
         result = handle_result(
             self.client.get_object(
                 ObjectID(self.file_chunk_id),
@@ -101,13 +100,13 @@ class MfsFileChunk(MfsFile):
     def get_create_image_chunk_cap(
         self,
         object_id: str,
-    ) -> CreateFileChunkCap:
+    ) -> MfsCreateFileChunkCap:
         result = handle_result(
             self.client.get_object(ObjectID(object_id)),
         )
 
         if isinstance(result, ObjectRead):
-            return CreateFileChunkCap(
+            return MfsCreateFileChunkCap(
                 id=result.object_id,
                 hash=result.content.fields["hash"],
                 file_id=result.content.fields["file_id"],

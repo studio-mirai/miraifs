@@ -26,7 +26,7 @@ from miraifs_sdk.models import (
 )
 
 
-class MfsFile(MiraiFs):
+class File(MiraiFs):
     def __init__(
         self,
         file_id: str | None = None,
@@ -182,7 +182,7 @@ class MfsFile(MiraiFs):
 
     def view(
         self,
-    ):
+    ) -> File:
         result = handle_result(
             self.client.get_object(ObjectID(self.file_id)),
         )
