@@ -6,7 +6,9 @@ import zstandard as zstd
 
 
 def get_zstd_version():
-    result = subprocess.run(["zstd", "--version"], capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        ["zstd", "--version"], capture_output=True, text=True, check=False
+    )
     output = result.stdout.strip()
     return output
 
@@ -74,3 +76,15 @@ def split_lists_into_sublists(
     sublist_size: int = 511,
 ) -> list[list[str]]:
     return [list[i : i + sublist_size] for i in range(0, len(list), sublist_size)]
+
+
+def to_mist(
+    value: float,
+) -> int:
+    return int(value * 10**9)
+
+
+def to_sui(
+    value: float,
+) -> float:
+    return value / 10**9

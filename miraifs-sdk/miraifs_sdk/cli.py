@@ -5,10 +5,11 @@ from hashlib import blake2b, md5
 from pathlib import Path
 from enum import Enum
 import typer
+import time
 from pysui.sui.sui_txresults.complex_tx import TxResponse
 from rich import print
 from rich.progress import Progress, SpinnerColumn, TextColumn
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from miraifs_sdk import PACKAGE_ID
 from miraifs_sdk.miraifs import CreateFileChunkCap, FileUploadData, MiraiFs, FileChunk
 from miraifs_sdk.utils import (
@@ -62,7 +63,7 @@ def upload(
         help="The path to the file to initialize.",
     ),
     file_id: str = typer.Argument(),
-    verify_hash_onchain: bool = typer.Option(True),
+    verify_hash_onchain: bool = typer.Option(False),
 ):
     mfs = MiraiFs()
 
@@ -135,9 +136,32 @@ def upload(
         for sublist in file_chunks_sublists
     }
 
-    gas_coins = mfs.request_gas_coins(len(create_file_chunk_caps), 5)
-    print("\nFinding gas coins...")
-    print(gas_coins)
+    print(f"\nPreparing to upload {len(file_chunks_sublists)} file chunks...")
+
+    if verify_hash_onchain:
+        gas_coin_value = 5
+    else:
+        gas_coin_value = 1
+
+    print(f"\nFinding {len(file_chunks_sublists)} {gas_coin_value} SUI gas coins...")
+
+    all_gas_coins = mfs.get_all_gas_coins()
+    time.sleep(1)
+    mfs.merge_coins(all_gas_coins)
+    time.sleep(1)
+    all_gas_coins = mfs.get_all_gas_coins()
+    time.sleep(1)
+    gas_coins = mfs.split_coin(
+        mfs.find_largest_gas_coin(all_gas_coins),
+        len(create_file_chunk_caps),
+        gas_coin_value,
+    )
+
+    print(f"Found {len(gas_coins)} for file chunk uploads!")
+
+    if len(gas_coins) != len(create_file_chunk_caps):
+        raise typer.Exit("Not enough gas coins to upload file chunks!")
+
     with ThreadPoolExecutor(
         max_workers=min(len(create_file_chunk_caps), 16)
     ) as executor:
@@ -167,8 +191,8 @@ def upload(
             else:
                 print(f"FAILED: {result.effects.transaction_digest}!")
 
-    print("\nFile chunks created successfully!")
     print(file_chunk_ids)
+    print(f"\nSUCCESS: Uploaded {len(file_chunk_ids)} file chunks for file {file_id}!")  # fmt: skip
 
 
 @app.command()
@@ -190,9 +214,9 @@ def register(
     )
 
     if len(result.errors) == 0:
-        print(f"Successfully registered file chunks for {file.id}!")
         file = mfs.get_file(file_id)
         print(file)
+        print(f"\nSUCCESS: Registered {len(register_file_chunk_caps)} file chunks for {file.id}!")  # fmt: skip
 
 
 @app.command()
@@ -277,13 +301,13 @@ def create(
         compression_level=compression,
     )
 
-    print(f"File Size: {file_size_bytes}B ({round(file_size_bytes / 1024)}KB)")
+    print(file_upload_data.model_dump(exclude=["chunk_hashes"]))
+    print(f"\nFile Size: {file_size_bytes}B ({round(file_size_bytes / 1024)}KB)")
     print(f"File Chunks: {len(file_chunk_hashes)}")
-    print(file_upload_data.model_dump_json(indent=4))
 
     if not confirm:
         typer.confirm(
-            "Please confirm file upload details are correct.",
+            "\nPlease confirm file upload details are correct.",
             abort=True,
         )
 
@@ -301,19 +325,19 @@ def create(
 
         for event in result.events:
             event_data = json.loads(event.parsed_json.replace("'", '"'))
+            print(event_data)
             if event.event_type == f"{PACKAGE_ID}::file::FileCreatedEvent":  # fmt: skip
                 file_created_event_data = event_data
             if event.event_type == f"{PACKAGE_ID}::file::CreateFileChunkCapCreatedEvent":  # fmt: skip
                 create_file_chunk_cap_created_event_data.append(event_data)
 
         file = mfs.get_file(file_created_event_data["id"])
-        print(file)
-
         create_file_chunk_caps: list[CreateFileChunkCap] = []
         for event_data in create_file_chunk_cap_created_event_data:
             create_file_chunk_caps.append(
                 CreateFileChunkCap(
                     id=event_data["id"],
+                    index=int(event_data["index"]),
                     hash=event_data["hash"],
                     file_id=file.id,
                 ),
@@ -340,6 +364,36 @@ def view(
 
 
 @app.command()
+def merge_gas():
+    mfs = MiraiFs()
+    gas_coins = mfs.get_all_gas_coins()
+    if len(gas_coins) > 2:
+        mfs.merge_coins(gas_coins)
+        gas_coins = mfs.get_all_gas_coins()
+    else:
+        print("Minimum gas coin count has already been reached.")
+
+    print(gas_coins)
+    return
+
+
+@app.command()
+def split_gas(
+    quantity: int = typer.Argument(...),
+    value: int = typer.Argument(...),
+):
+    mfs = MiraiFs()
+    gas_coins = mfs.get_all_gas_coins()
+    split_gas_coins = mfs.split_coin(
+        gas_coins[-1],
+        quantity,
+        value,
+    )
+    print(split_gas_coins)
+    return
+
+
+@app.command()
 def download(
     file_id: str = typer.Argument(
         ...,
@@ -352,6 +406,12 @@ def download(
     output_dir: Path = typer.Option(
         DOWNLOADS_DIR,
         help="The output dir to download the file to. Defaults to ./downlodas.",
+    ),
+    concurrency: int = typer.Option(
+        8,
+        min=1,
+        max=32,
+        help="The number of concurrent file chunk downloads to perform.",
     ),
 ):
     """
@@ -371,13 +431,24 @@ def download(
     file_chunk_ids = [chunk.value for chunk in file.chunks]
     print(f"Downloading {len(file_chunk_ids)} file chunks...")
 
-    chunk_strings: list[str] = []
-    for file_chunk_id in file_chunk_ids:
-        result = mfs.get_file_chunk(file_chunk_id)
-        chunk_strings.append("".join(result.data))
+    file_chunks: list[FileChunk] = []
+    with ThreadPoolExecutor(
+        max_workers=min(len(file_chunk_ids), concurrency)
+    ) as executor:
+        futures = []
+        for file_chunk_id in file_chunk_ids:
+            future = executor.submit(mfs.get_file_chunk, file_chunk_id)
+            futures.append(future)
+
+        for future in as_completed(futures):
+            result = future.result()
+            file_chunks.append(result)
+            # chunk_strings.append("".join(result.data))
+
+    file_chunks.sort(key=lambda x: x.index)
 
     print("Reconstructing file from chunks...")
-    joined_data = "".join(chunk_strings)
+    joined_data = "".join(["".join(chunk.data) for chunk in file_chunks])
 
     print(f"Decoding file data from {file.encoding} to binary data...")
     if file.encoding == "base64":
@@ -406,15 +477,3 @@ def download(
     with open(output_dir / output_file_name, "wb") as f:
         print(f"Saving file to ./downloads/{file.id}.{file.extension}")
         f.write(data)
-
-
-@app.command()
-def split_gas(
-    quantity: int = typer.Argument(...),
-    value: int = typer.Argument(...),
-):
-    mfs = MiraiFs()
-
-    result = mfs.request_gas_coins(quantity, value)
-    print(result)
-    return

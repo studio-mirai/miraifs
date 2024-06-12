@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from miraifs_sdk import PACKAGE_ID
 from miraifs_sdk.sui import GasCoin, Sui
+from miraifs_sdk.utils import to_mist
 from rich import print
 
 
@@ -39,12 +40,14 @@ class FileConfig(BaseModel):
 
 class FileChunk(BaseModel):
     id: str
+    index: int
     hash: str
     data: list[str]
 
 
 class CreateFileChunkCap(BaseModel):
     id: str
+    index: int
     hash: str
     file_id: str
 
@@ -82,11 +85,11 @@ class MiraiFs(Sui):
     def create_file(
         self,
         upload_data: FileUploadData,
-        gas_coin: GasCoin | None = None,
     ):
         txer = SuiTransaction(
             client=self.client,
             compress_inputs=True,
+            merge_gas_budget=True,
         )
 
         if upload_data.compression_algorithm:
@@ -150,9 +153,7 @@ class MiraiFs(Sui):
         )
 
         result = handle_result(
-            txer.execute(
-                use_gas_object=gas_coin.id if gas_coin else None,
-            ),
+            txer.execute(),
         )
 
         return result
@@ -206,6 +207,7 @@ class MiraiFs(Sui):
         if isinstance(result, ObjectRead):
             file_chunk = FileChunk(
                 id=result.object_id,
+                index=result.content.fields["index"],
                 hash=result.content.fields["hash"],
                 data=result.content.fields["data"],
             )
@@ -219,6 +221,11 @@ class MiraiFs(Sui):
         verify_hash_onchain: bool,
         gas_coin: GasCoin | None = None,
     ) -> TxResponse:
+        if verify_hash_onchain:
+            gas_budget = to_mist(5)
+        else:
+            gas_budget = to_mist(1)
+
         txer = SuiTransaction(
             client=self.client,
             compress_inputs=True,
@@ -240,7 +247,7 @@ class MiraiFs(Sui):
 
         result = handle_result(
             txer.execute(
-                gas_budget=5_000_000_000,
+                gas_budget=gas_budget,
                 use_gas_object=gas_coin.id if gas_coin else None,
             ),
         )
@@ -273,6 +280,7 @@ class MiraiFs(Sui):
         if isinstance(result, ObjectRead):
             return CreateFileChunkCap(
                 id=result.object_id,
+                index=result.content.fields["index"],
                 hash=result.content.fields["hash"],
                 file_id=result.content.fields["file_id"],
             )
@@ -301,16 +309,16 @@ class MiraiFs(Sui):
         self,
         file: File,
         register_file_chunk_caps: list[RegisterFileChunkCap],
-        gas_coin: GasCoin | None = None,
     ):
         txer = SuiTransaction(
             client=self.client,
             compress_inputs=True,
+            merge_gas_budget=True,
         )
 
         for cap in register_file_chunk_caps:
             txer.move_call(
-                target=f"{PACKAGE_ID}::file::receive_and_register_file_chunk",
+                target=f"{PACKAGE_ID}::file::register_file_chunk",
                 arguments=[
                     ObjectID(file.id),
                     ObjectID(cap.id),
@@ -320,7 +328,6 @@ class MiraiFs(Sui):
         result = handle_result(
             txer.execute(
                 gas_budget=2_500_000_000,
-                use_gas_object=ObjectID(gas_coin.id) if gas_coin else None,
             ),
         )
 
@@ -330,11 +337,11 @@ class MiraiFs(Sui):
         self,
         file_id: str,
         create_file_chunk_caps: list[CreateFileChunkCap],
-        gas_coin: GasCoin | None = None,
     ) -> TxResponse:
         txer = SuiTransaction(
             client=self.client,
             compress_inputs=True,
+            merge_gas_budget=True,
         )
 
         for create_file_chunk_cap in create_file_chunk_caps:
@@ -347,9 +354,7 @@ class MiraiFs(Sui):
             )
 
         result = handle_result(
-            txer.execute(
-                use_gas_object=gas_coin.id if gas_coin else None,
-            ),
+            txer.execute(),
         )
 
         if isinstance(result, TxResponse):

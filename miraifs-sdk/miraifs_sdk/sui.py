@@ -13,6 +13,7 @@ from pysui.sui.sui_txresults.single_tx import (
     SuiCoinObjects,
 )
 from pysui.sui.sui_types import SuiAddress
+from miraifs_sdk.utils import to_mist
 
 
 class GasCoin(BaseModel):
@@ -27,59 +28,62 @@ class Sui:
 
     def get_all_gas_coins(
         self,
-        count: int,
     ) -> list[GasCoin]:
-        builder = GetCoins(
-            owner=self.config.active_address,
-            limit=count,
-        )
-        result = handle_result(self.client.execute(builder))
+        all_gas_coins: list[GasCoin] = []
 
-        if isinstance(result, SuiCoinObjects):
-            gas_coins = [
-                GasCoin(
-                    id=coin.coin_object_id,
-                    balance=coin.balance,
-                )
-                for coin in result.data
-            ]
-            gas_coins.sort(key=lambda x: x.balance, reverse=True)
-            return gas_coins
+        cursor = None
+        while True:
+            builder = GetCoins(
+                owner=self.config.active_address,
+                limit=50,
+                cursor=cursor,
+            )
+            result = handle_result(self.client.execute(builder))
+
+            if isinstance(result, SuiCoinObjects):
+                gas_coins = [
+                    GasCoin(
+                        id=coin.coin_object_id,
+                        balance=coin.balance,
+                    )
+                    for coin in result.data
+                ]
+                all_gas_coins.extend(gas_coins)
+
+                # Break out of the loop if there are no more pages.
+                if not result.next_cursor:
+                    break
+
+                cursor = ObjectID(result.next_cursor)
+            else:
+                break
+
+        all_gas_coins.sort(key=lambda x: x.balance, reverse=True)
+        return all_gas_coins
 
     def split_coin(
         self,
-        from_coin_id: str,
-        quantity: int,
-        amount: int,
-    ):
-        txer = SuiTransaction(
-            client=self.client,
-            compress_inputs=True,
-        )
-
-        txer.split_coin(
-            coin=ObjectID(from_coin_id), amounts=[amount for _ in range(quantity)]
-        )
-
-        result = handle_result(txer.execute())
-        return result
-
-    def request_gas_coins(
-        self,
+        coin: GasCoin,
         quantity: int,
         value: int,
-    ):
-        all_gas_coins = self.get_all_gas_coins(50)
+    ) -> list[GasCoin]:
+        """
+        Split a coin into multiple coins of the specified value,
+        and return a list of newly created GasCoin objects.
 
+        Args:
+            coin (GasCoin): The coin to split.
+            quantity (int): The number of coins to split the coin into.
+            value (int): The value of each coin.
+        """
         txer = SuiTransaction(
             client=self.client,
             compress_inputs=True,
-            merge_gas_budget=True,
         )
 
         coins = txer.split_coin(
-            coin=ObjectID(all_gas_coins[0].id),
-            amounts=[value * 10**9 for _ in range(quantity)],
+            coin=ObjectID(coin.id),
+            amounts=[to_mist(value) for _ in range(quantity)],
         )
 
         txer.transfer_objects(
@@ -90,17 +94,51 @@ class Sui:
         result = handle_result(txer.execute())
 
         if isinstance(result, TxResponse):
-            print(result.effects)
-            coins = []
+            coins: list[GasCoin] = []
             created_objs = result.effects.created
             for obj in created_objs:
                 coin = GasCoin(
                     id=obj.reference.object_id,
-                    balance=value * 10**9,
+                    balance=value,
                 )
                 coins.append(coin)
 
         return coins
+
+    def merge_coins(
+        self,
+        coins: list[GasCoin],
+    ):
+        txer = SuiTransaction(
+            client=self.client,
+            compress_inputs=True,
+        )
+
+        gas_coin = coins.pop(0)
+
+        coin_to_merge_to = txer.move_call(
+            target="0x2::coin::zero",
+            arguments=[],
+            type_arguments=["0x2::sui::SUI"],
+        )
+
+        txer.merge_coins(
+            merge_to=coin_to_merge_to,
+            merge_from=[ObjectID(coin.id) for coin in coins],
+        )
+
+        txer.transfer_objects(
+            transfers=[coin_to_merge_to],
+            recipient=self.config.active_address,
+        )
+
+        result = handle_result(
+            txer.execute(
+                use_gas_object=ObjectID(gas_coin.id),
+            ),
+        )
+
+        return result
 
     def get_owner_address(
         self,
@@ -164,3 +202,9 @@ class Sui:
                 break
 
         return all_objects
+
+    def find_largest_gas_coin(
+        self,
+        coins: list[GasCoin],
+    ):
+        return max(coins, key=lambda coin: coin.balance)

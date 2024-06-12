@@ -7,6 +7,7 @@ module miraifs::file {
     use sui::event;
     use sui::hash::{blake2b256};
     use sui::hex::{Self};
+    use sui::table::{Table};
     use sui::transfer::{Receiving};
     use sui::vec_map::{Self, VecMap};
     use sui::vec_set::{Self, VecSet};
@@ -28,6 +29,19 @@ module miraifs::file {
         chunks: VecMap<String, Option<ID>>,
     }
 
+    public struct TableFile has key, store {
+        id: UID,
+        name: Option<String>,
+        encoding: String,
+        mime_type: String,
+        extension: String,
+        size: u64,
+        created_at_ts: u64,
+        hash: String,
+        config: FileConfig,
+        chunks: Table<String, Option<ID>>,
+    }
+
     public struct FileConfig has drop, store {
         chunk_size: u8,
         sublist_size: u16,
@@ -37,12 +51,14 @@ module miraifs::file {
 
     public struct FileChunk has key, store {
         id: UID,
+        index: u64,
         hash: String,
         data: vector<String>,
     }
 
     public struct CreateFileChunkCap has key {
         id: UID,
+        index: u64,
         hash: String,
         file_id: ID,
     }
@@ -62,12 +78,14 @@ module miraifs::file {
     
     public struct CreateFileChunkCapCreatedEvent has copy, drop {
         id: ID,
+        index: u64,
         hash: String,
     }
 
     public struct FileChunkCreatedEvent has copy, drop {
         id: ID,
         file_id: ID,
+        index: u64,
         hash: String,
     }
 
@@ -101,6 +119,7 @@ module miraifs::file {
 
         let mut create_file_chunk_cap_ids = vec_set::empty<ID>();
 
+        let mut index: u64 = 0;
         while (!file_chunk_hashes.is_empty()) {
             // Remove the first hash from the list of expected chunk hashes.
             let file_chunk_hash = file_chunk_hashes.remove(0);
@@ -109,6 +128,7 @@ module miraifs::file {
             // Create a cap to allow the creation of this file chunk.
             let create_file_chunk_cap = CreateFileChunkCap {
                 id: object::new(ctx),
+                index: index,
                 hash: file_chunk_hash,
                 file_id: object::id(&file),
             };
@@ -116,12 +136,15 @@ module miraifs::file {
             event::emit(
                 CreateFileChunkCapCreatedEvent {
                     id: object::id(&create_file_chunk_cap),
+                    index: index,
                     hash: file_chunk_hash,
                 }
             );
 
             create_file_chunk_cap_ids.insert(object::id(&create_file_chunk_cap));
             transfer::transfer(create_file_chunk_cap, object::uid_to_address(&file.id));
+
+            index = index + 1;
         };
 
         // Add a dynamic field to the file object to store
@@ -203,6 +226,7 @@ module miraifs::file {
     
         let file_chunk = FileChunk { 
             id: object::new(ctx),
+            index: cap.index,
             hash: file_chunk_hash,
             data: data,
         };
@@ -211,6 +235,7 @@ module miraifs::file {
             FileChunkCreatedEvent {
                 id: object::id(&file_chunk),
                 file_id: cap.file_id,
+                index: cap.index,
                 hash: file_chunk_hash,
             }
         );
@@ -228,6 +253,7 @@ module miraifs::file {
 
         let CreateFileChunkCap {
             id,
+            index: _,
             hash: _,
             file_id: _,
         } = cap;
