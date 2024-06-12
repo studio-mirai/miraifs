@@ -49,14 +49,14 @@ module miraifs::file {
         compression_level: Option<u8>,
     }
 
-    public struct FileChunk has key, store {
+    public struct FileChunk has key {
         id: UID,
         index: u64,
         hash: String,
         data: vector<String>,
     }
 
-    public struct CreateFileChunkCap has key {
+    public struct CreateFileChunkCap has key, store {
         id: UID,
         index: u64,
         hash: String,
