@@ -7,11 +7,10 @@ from enum import Enum
 import typer
 from pysui.sui.sui_txresults.complex_tx import TxResponse
 from rich import print
-from miraifs_sdk.miraifs import MiraiFs
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from concurrent.futures import ThreadPoolExecutor
 from miraifs_sdk import PACKAGE_ID
-from miraifs_sdk.models import MfsCreateFileChunkCap, MfsFileUploadData, MfsFileChunk
+from miraifs_sdk.miraifs import CreateFileChunkCap, FileUploadData, MiraiFs, FileChunk
 from miraifs_sdk.utils import (
     calculate_hash,
     calculate_hash_for_bytes,
@@ -21,11 +20,9 @@ from miraifs_sdk.utils import (
     encode_file,
     split_lists_into_sublists,
 )
-
+from miraifs_sdk import DOWNLOADS_DIR
 
 app = typer.Typer()
-
-mfs = MiraiFs()
 
 
 class FileEncodingSchemes(str, Enum):
@@ -37,6 +34,7 @@ class FileEncodingSchemes(str, Enum):
 def create_image_chunk_caps(
     file_id: str = typer.Argument(...),
 ):
+    mfs = MiraiFs()
     create_image_chunk_cap_ids = mfs.get_create_image_chunk_cap_ids_for_file(file_id)
     print(create_image_chunk_cap_ids)
 
@@ -45,6 +43,7 @@ def create_image_chunk_caps(
 def receive(
     file_id: str = typer.Argument(...),
 ):
+    mfs = MiraiFs()
     create_file_chunk_cap_ids = mfs.get_create_image_chunk_cap_ids_for_file(
         file_id,
     )
@@ -60,14 +59,13 @@ def receive(
 def upload(
     path: Path = typer.Argument(
         ...,
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        help="The local path of the file to upload.",
+        help="The path to the file to initialize.",
     ),
     file_id: str = typer.Argument(),
     verify_hash_onchain: bool = typer.Option(True),
 ):
+    mfs = MiraiFs()
+
     print(f"Fetching details for {file_id}")
 
     with open(path, "rb") as f:
@@ -154,7 +152,7 @@ def upload(
             )
             futures.append(future)
 
-    file_chunk_ids: list[MfsFileChunk] = []
+    file_chunk_ids: list[FileChunk] = []
 
     for future in futures:
         result = future.result()  # Wait for the task to complete and get the result
@@ -177,6 +175,8 @@ def upload(
 def register(
     file_id: str = typer.Argument(...),
 ):
+    mfs = MiraiFs()
+
     file = mfs.get_file(file_id)
 
     register_file_chunk_caps = mfs.get_register_file_chunk_caps_for_file(file.id)
@@ -202,7 +202,7 @@ def create(
         exists=True,
         file_okay=True,
         dir_okay=False,
-        help="The local path of the file to create.",
+        help="The path to the file to initialize.",
     ),
     encoding: FileEncodingSchemes = typer.Option(
         FileEncodingSchemes.base85,
@@ -235,6 +235,8 @@ def create(
     Initialize a file upload by creating a MiraiFS `File` object
     that contains file metadata and the expected file chunk hashes.
     """
+    mfs = MiraiFs()
+
     with open(path, "rb") as f:
         data = f.read()
 
@@ -262,7 +264,7 @@ def create(
     mime_type, _ = mimetypes.guess_type(path)
     extension = path.suffix.lower().replace(".", "")
 
-    file_upload_data = MfsFileUploadData(
+    file_upload_data = FileUploadData(
         encoding=encoding.value,
         mime_type=mime_type,
         extension=extension,
@@ -292,7 +294,6 @@ def create(
     ) as progress:
         progress.add_task(description="Broadcasting transaction...", total=2)
         result = mfs.create_file(file_upload_data)
-        print(result)
 
     if isinstance(result, TxResponse):
         file_created_event_data = None
@@ -308,10 +309,10 @@ def create(
         file = mfs.get_file(file_created_event_data["id"])
         print(file)
 
-        create_file_chunk_caps: list[MfsCreateFileChunkCap] = []
+        create_file_chunk_caps: list[CreateFileChunkCap] = []
         for event_data in create_file_chunk_cap_created_event_data:
             create_file_chunk_caps.append(
-                MfsCreateFileChunkCap(
+                CreateFileChunkCap(
                     id=event_data["id"],
                     hash=event_data["hash"],
                     file_id=file.id,
@@ -333,13 +334,36 @@ def create(
 def view(
     file_id: str = typer.Argument(...),
 ):
-    file = mfs.File(file_id)
+    mfs = MiraiFs()
+    file = mfs.get_file(file_id)
+    print(file)
 
 
 @app.command()
 def download(
-    file_id: str = typer.Argument(...),
+    file_id: str = typer.Argument(
+        ...,
+        help="The object ID of the file to download.",
+    ),
+    file_name: str = typer.Option(
+        None,
+        help="The filename to save the file as.",
+    ),
+    output_dir: Path = typer.Option(
+        DOWNLOADS_DIR,
+        help="The output dir to download the file to. Defaults to ./downlodas.",
+    ),
 ):
+    """
+    Download a MiraiFS file.
+
+    Args:
+        file_id (str): The file ID of the file to download.
+        file_name (str): The name to save the file as.
+        output_dir (Path): The output directory to save the file to.
+    """
+    mfs = MiraiFs()
+
     print(f"Fetching file {file_id}...")
     file = mfs.get_file(file_id)
     print(file)
@@ -372,9 +396,14 @@ def download(
     else:
         raise typer.Exit("File hash of downloaded file does not match expected hash.")
 
-    Path("./downloads").mkdir(parents=True, exist_ok=True)
+    if file_name:
+        output_file_name = file_name
+    elif file.name:
+        output_file_name = f"{file.name}.{file.extension}"
+    else:
+        output_file_name = f"{file.id}.{file.extension}"
 
-    with open(f"./downloads/{file.id}.{file.extension}", "wb") as f:
+    with open(output_dir / output_file_name, "wb") as f:
         print(f"Saving file to ./downloads/{file.id}.{file.extension}")
         f.write(data)
 
@@ -384,6 +413,8 @@ def split_gas(
     quantity: int = typer.Argument(...),
     value: int = typer.Argument(...),
 ):
+    mfs = MiraiFs()
+
     result = mfs.request_gas_coins(quantity, value)
     print(result)
     return
