@@ -1,8 +1,9 @@
 import base64
 import hashlib
 import subprocess
-
+from hashlib import blake2b
 import zstandard as zstd
+from typing import Any
 
 
 def get_zstd_version():
@@ -33,18 +34,27 @@ def encode_file(
     return file_bytes.decode("utf-8")
 
 
-def calculate_hash(
-    data: str,
-) -> str:
-    hash = hashlib.blake2b(data.encode("utf-8"), digest_size=32).hexdigest()
-    return hash
+def calculate_hash_u256(
+    data: bytes,
+) -> int:
+    hash = hashlib.blake2b(data, digest_size=32)
+    hash_u256 = int.from_bytes(hash.digest(), "big")
+    return hash_u256
 
 
 def calculate_hash_for_bytes(
     data: bytes,
-) -> str:
-    hash = hashlib.blake2b(data, digest_size=32).hexdigest()
+) -> blake2b:
+    hash = hashlib.blake2b(data, digest_size=32)
     return hash
+
+
+def chunk_bytes(
+    data: bytes,
+    chunk_size: int,
+) -> list[bytes]:
+    """Split a bytes object into chunks of a specified size."""
+    return [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)]
 
 
 def compress_data(
@@ -73,8 +83,8 @@ def chunk_file_data(
 
 def split_lists_into_sublists(
     list: list,
-    sublist_size: int = 511,
-) -> list[list[str]]:
+    sublist_size: int = 256,
+) -> list[list[Any]]:
     return [list[i : i + sublist_size] for i in range(0, len(list), sublist_size)]
 
 

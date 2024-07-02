@@ -1,27 +1,34 @@
 import base64
 import json
 import mimetypes
+import itertools
 from hashlib import blake2b, md5
 from pathlib import Path
 from enum import Enum
 import typer
+from pysui import SyncClient, SuiConfig, handle_result
 import time
 from pysui.sui.sui_txresults.complex_tx import TxResponse
 from rich import print
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from miraifs_sdk import PACKAGE_ID
-from miraifs_sdk.miraifs import CreateFileChunkCap, FileUploadData, MiraiFs, FileChunk
+from miraifs_sdk.miraifs import CreateChunkCap, FileUploadData, MiraiFs, Chunk
 from miraifs_sdk.utils import (
-    calculate_hash,
+    calculate_hash_u256,
     calculate_hash_for_bytes,
     chunk_file_data,
+    chunk_bytes,
     compress_data,
     decompress_data,
     encode_file,
     split_lists_into_sublists,
 )
 from miraifs_sdk import DOWNLOADS_DIR
+
+from pysui.sui.sui_txn.sync_transaction import SuiTransaction
+from pysui.sui.sui_types import SuiU8, SuiBoolean, SuiString, SuiU256
+
 
 app = typer.Typer()
 
@@ -31,13 +38,64 @@ class FileEncodingSchemes(str, Enum):
     base85 = "base85"
 
 
+TEST_PACKAGE_ID = "0xf0d110a18df07a23b36365d41a4641cddbdf2a998b0cad0cd5a35750f5c5ed3a"
+
+# computation_cost=1000000, non_refundable_storage_fee=9880, storage_cost=2766400, storage_rebate=978120
+# computation_cost=1000000, non_refundable_storage_fee=9880, storage_cost=2546000, storage_rebate=978120)
+
+config = SuiConfig.default_config()
+client = SyncClient(config)
+
+
 @app.command()
-def create_image_chunk_caps(
-    file_id: str = typer.Argument(...),
-):
-    mfs = MiraiFs()
-    create_image_chunk_cap_ids = mfs.get_create_image_chunk_cap_ids_for_file(file_id)
-    print(create_image_chunk_cap_ids)
+def vec_test(verify: bool = typer.Option(False)):
+    with open("/Users/brianli/Desktop/machin.jpg", "rb") as f:
+        data = f.read()
+
+    hash = calculate_hash_for_bytes(data)
+    hash_u256 = int.from_bytes(hash.digest(), "big")
+
+    # Split bytes into 256 byte chunks.
+    byte_vectors: list[list[int]] = split_lists_into_sublists(list(data), 256)
+    chunked_byte_vectors = split_lists_into_sublists(byte_vectors, 128)
+
+    for chunked_byte_vector in chunked_byte_vectors:
+        txer = SuiTransaction(
+            client=client,
+            compress_inputs=True,
+        )
+
+        chunk, cap = txer.move_call(
+            target=f"{TEST_PACKAGE_ID}::chunk::new",
+            arguments=[SuiU256(hash_u256), SuiBoolean(verify)],
+        )
+
+        for v in chunked_byte_vector:
+            data = txer.make_move_vector(
+                items=[SuiU8(i) for i in v],
+                item_type="u8",
+            )
+
+            txer.move_call(
+                target=f"{TEST_PACKAGE_ID}::chunk::insert_data",
+                arguments=[chunk, data],
+            )
+
+        txer.move_call(
+            target=f"{TEST_PACKAGE_ID}::chunk::verify",
+            arguments=[cap, chunk],
+        )
+
+        txer.transfer_objects(
+            transfers=[chunk],
+            recipient=config.active_address,
+        )
+
+        result = handle_result(txer.execute(gas_budget=10_000_000_000))
+        print(result.effects.status, result.effects.gas_used)
+        print(result.effects.d)
+
+    return
 
 
 @app.command()
@@ -45,12 +103,12 @@ def receive(
     file_id: str = typer.Argument(...),
 ):
     mfs = MiraiFs()
-    create_file_chunk_cap_ids = mfs.get_create_image_chunk_cap_ids_for_file(
+    create_chunk_cap_ids = mfs.get_create_image_chunk_cap_ids_for_file(
         file_id,
     )
-    result = mfs.receive_create_file_chunk_caps(
+    result = mfs.receive_create_chunk_caps(
         file_id,
-        create_file_chunk_cap_ids,
+        create_chunk_cap_ids,
     )
     print(result)
     return
@@ -104,32 +162,30 @@ def upload(
     if local_chunks_hash != onchain_chunks_hash:
         raise typer.Exit("Onchain chunk hashes do not match local chunk hashes.")
 
-    create_file_chunk_cap_ids = mfs.get_create_image_chunk_cap_ids_for_file(
-        onchain_file.id
-    )
+    create_chunk_cap_ids = mfs.get_create_image_chunk_cap_ids_for_file(onchain_file.id)
 
-    create_file_chunk_caps = [
-        mfs.get_create_image_chunk_cap(cap_id) for cap_id in create_file_chunk_cap_ids
+    create_chunk_caps = [
+        mfs.get_create_image_chunk_cap(cap_id) for cap_id in create_chunk_cap_ids
     ]
 
-    for create_file_chunk_cap in create_file_chunk_caps:
-        owner = mfs.get_owner_address(create_file_chunk_cap.id)
+    for create_chunk_cap in create_chunk_caps:
+        owner = mfs.get_owner_address(create_chunk_cap.id)
         if owner == onchain_file.id:
             typer.confirm(
-                text="CreateFileChunkCap objects are owned by the parent file. Would you like to receive them now?",
+                text="CreateChunkCap objects are owned by the parent file. Would you like to receive them now?",
                 abort=True,
             )
-            result = mfs.receive_create_file_chunk_caps(
+            result = mfs.receive_create_chunk_caps(
                 file_id,
-                create_file_chunk_caps,
+                create_chunk_caps,
             )
             if len(result.errors) == 0:
-                print(f"Successfully received CreateFileChunkCap objects for file {onchain_file.id}!")  # fmt: skip
+                print(f"Successfully received CreateChunkCap objects for file {onchain_file.id}!")  # fmt: skip
                 break
             else:
-                raise typer.Exit(f"Failed to receive CreateFileChunkCap objects for file {onchain_file.id}!")  # fmt: skip
+                raise typer.Exit(f"Failed to receive CreateChunkCap objects for file {onchain_file.id}!")  # fmt: skip
         elif owner != mfs.config.active_address.address:
-            raise typer.Exit(f"CreateFileChunkCap {create_file_chunk_cap.id} is owned by another address.")  # fmt: skip
+            raise typer.Exit(f"CreateChunkCap {create_chunk_cap.id} is owned by another address.")  # fmt: skip
 
     file_chunks_by_hash = {
         blake2b("".join(sublist).encode("utf-8"), digest_size=32).hexdigest(): sublist
@@ -153,30 +209,28 @@ def upload(
     time.sleep(1)
     gas_coins = mfs.split_coin(
         mfs.find_largest_gas_coin(all_gas_coins),
-        len(create_file_chunk_caps),
+        len(create_chunk_caps),
         gas_coin_value,
     )
 
     print(f"Found {len(gas_coins)} for file chunk uploads!")
 
-    if len(gas_coins) != len(create_file_chunk_caps):
+    if len(gas_coins) != len(create_chunk_caps):
         raise typer.Exit("Not enough gas coins to upload file chunks!")
 
-    with ThreadPoolExecutor(
-        max_workers=min(len(create_file_chunk_caps), 16)
-    ) as executor:
+    with ThreadPoolExecutor(max_workers=min(len(create_chunk_caps), 16)) as executor:
         futures = []
-        for i, create_file_chunk_cap in enumerate(create_file_chunk_caps):
+        for i, create_chunk_cap in enumerate(create_chunk_caps):
             future = executor.submit(
-                mfs.create_file_chunk,
-                create_file_chunk_cap,
-                file_chunks_by_hash[create_file_chunk_cap.hash],
+                mfs.create_chunk,
+                create_chunk_cap,
+                file_chunks_by_hash[create_chunk_cap.hash],
                 verify_hash_onchain,
                 gas_coin=gas_coins[i],
             )
             futures.append(future)
 
-    file_chunk_ids: list[FileChunk] = []
+    file_chunk_ids: list[Chunk] = []
 
     for future in futures:
         result = future.result()  # Wait for the task to complete and get the result
@@ -185,7 +239,7 @@ def upload(
             if len(result.errors) == 0:
                 print(f"SUCCESS: {result.effects.transaction_digest}!")  # fmt: skip
                 for event in result.events:
-                    if event.event_type == f"{PACKAGE_ID}::file::FileChunkCreatedEvent":  # fmt: skip
+                    if event.event_type == f"{PACKAGE_ID}::file::ChunkCreatedEvent":  # fmt: skip
                         event_json = json.loads(event.parsed_json.replace("'", '"'))
                         file_chunk_ids.append(event_json["id"])
             else:
@@ -206,7 +260,7 @@ def register(
     register_file_chunk_caps = mfs.get_register_file_chunk_caps_for_file(file.id)
 
     if len(register_file_chunk_caps) == 0:
-        raise typer.Exit("No RegisterFileChunkCap objects found for this file.")
+        raise typer.Exit("No RegisterChunkCap objects found for this file.")
 
     result = mfs.receive_and_register_file_chunks(
         file,
@@ -228,31 +282,9 @@ def create(
         dir_okay=False,
         help="The path to the file to initialize.",
     ),
-    encoding: FileEncodingSchemes = typer.Option(
-        FileEncodingSchemes.base85,
-        help="The encoding type to use for the file (b64 or base85).",
-    ),
     confirm: bool = typer.Option(
         False,
         help="Confirm file upload details are correct.",
-    ),
-    compression: int = typer.Option(
-        9,
-        min=1,
-        max=22,
-        help="The zstd compression level to use.",
-    ),
-    chunk_size: int = typer.Option(
-        230,
-        min=1,
-        max=230,
-        help="The size of each file chunk.",
-    ),
-    sublist_size: int = typer.Option(
-        511,
-        min=1,
-        max=511,
-        help="The size of each sublist.",
     ),
 ):
     """
@@ -265,45 +297,20 @@ def create(
         data = f.read()
 
     # Calculate the hash of the original uncompressed file.
-    original_file_hash = calculate_hash_for_bytes(data)
+    original_file_hash = calculate_hash_u256(data)
+    print(f"File Hash: {original_file_hash}")
+
     data_to_upload = data
-    compressed_data = compress_data(data, compression)
 
-    potential_savings = len(data) - len(compressed_data)
-    if potential_savings > 0:
-        comp_conf = typer.confirm(f"Would you like to compress this file to reduce filesize by {potential_savings / 1024}KB")  # fmt: skip
-        if comp_conf:
-            # Overwrite data_to_upload with compressed data.
-            data_to_upload = compressed_data
+    chunks = chunk_bytes(data_to_upload, 32768)
+    chunk_hashes = [calculate_hash_u256(b) for b in chunks]
 
-    file_data = encode_file(data_to_upload, encoding.value)
-    file_size_bytes = len(file_data)
-    file_chunks = chunk_file_data(file_data, chunk_size)
-    file_chunks_sublists = split_lists_into_sublists(file_chunks, sublist_size)
-
-    file_chunk_hashes = [
-        calculate_hash("".join(sublist)) for sublist in file_chunks_sublists
-    ]
-
+    file_size_bytes = len(data)
     mime_type, _ = mimetypes.guess_type(path)
-    extension = path.suffix.lower().replace(".", "")
 
-    file_upload_data = FileUploadData(
-        encoding=encoding.value,
-        mime_type=mime_type,
-        extension=extension,
-        size=file_size_bytes,
-        hash=original_file_hash,
-        chunk_size=chunk_size,
-        sublist_size=sublist_size,
-        chunk_hashes=file_chunk_hashes,
-        compression_algorithm="zstd",
-        compression_level=compression,
-    )
-
-    print(file_upload_data.model_dump(exclude=["chunk_hashes"]))
+    # print(file_upload_data.model_dump(exclude=["chunk_hashes"]))
     print(f"\nFile Size: {file_size_bytes}B ({round(file_size_bytes / 1024)}KB)")
-    print(f"File Chunks: {len(file_chunk_hashes)}")
+    print(f"File Chunks: {len(chunks)}")
 
     if not confirm:
         typer.confirm(
@@ -317,25 +324,24 @@ def create(
         transient=True,
     ) as progress:
         progress.add_task(description="Broadcasting transaction...", total=2)
-        result = mfs.create_file(file_upload_data)
+        result = mfs.create_file(chunk_hashes, mime_type)
 
     if isinstance(result, TxResponse):
         file_created_event_data = None
-        create_file_chunk_cap_created_event_data = []
+        create_chunk_cap_created_event_data = []
 
         for event in result.events:
             event_data = json.loads(event.parsed_json.replace("'", '"'))
-            print(event_data)
             if event.event_type == f"{PACKAGE_ID}::file::FileCreatedEvent":  # fmt: skip
                 file_created_event_data = event_data
-            if event.event_type == f"{PACKAGE_ID}::file::CreateFileChunkCapCreatedEvent":  # fmt: skip
-                create_file_chunk_cap_created_event_data.append(event_data)
+            if event.event_type == f"{PACKAGE_ID}::file::CreateChunkCapCreatedEvent":  # fmt: skip
+                create_chunk_cap_created_event_data.append(event_data)
 
         file = mfs.get_file(file_created_event_data["id"])
-        create_file_chunk_caps: list[CreateFileChunkCap] = []
-        for event_data in create_file_chunk_cap_created_event_data:
-            create_file_chunk_caps.append(
-                CreateFileChunkCap(
+        create_chunk_caps: list[CreateChunkCap] = []
+        for event_data in create_chunk_cap_created_event_data:
+            create_chunk_caps.append(
+                CreateChunkCap(
                     id=event_data["id"],
                     index=int(event_data["index"]),
                     hash=event_data["hash"],
@@ -345,8 +351,8 @@ def create(
 
         print("\nThe file below has been initialized successfully!")
         print(f"\n{file.model_dump_json(indent=4)}")
-        print("\nUse the CreateFileChunkCap objects below to upload the file chunks.")
-        print(f"\n{json.dumps([c.model_dump() for c in create_file_chunk_caps], indent=4)}")  # fmt: skip
+        print("\nUse the CreateChunkCap objects below to upload the file chunks.")
+        print(f"\n{json.dumps([c.model_dump() for c in create_chunk_caps], indent=4)}")  # fmt: skip
 
         print("\nUpload file chunks with the command below!")
         print(f"\nmfs upload {path} {file.id}")
@@ -431,7 +437,7 @@ def download(
     file_chunk_ids = [chunk.value for chunk in file.chunks]
     print(f"Downloading {len(file_chunk_ids)} file chunks...")
 
-    file_chunks: list[FileChunk] = []
+    file_chunks: list[Chunk] = []
     with ThreadPoolExecutor(
         max_workers=min(len(file_chunk_ids), concurrency)
     ) as executor:
@@ -450,15 +456,9 @@ def download(
     print("Reconstructing file from chunks...")
     joined_data = "".join(["".join(chunk.data) for chunk in file_chunks])
 
-    print(f"Decoding file data from {file.encoding} to binary data...")
-    if file.encoding == "base64":
-        data = base64.b64decode(joined_data)
-    elif file.encoding == "base85":
-        data = base64.b85decode(joined_data)
-
     if file.config.compression_algorithm == "zstd":
         print(f"Decompressing file data with {file.config.compression_algorithm}...")
-        data = decompress_data(data)
+        data = decompress_data(joined_data)
 
     print("Verifying data integrity...")
     downloaded_file_hash = calculate_hash_for_bytes(data)
