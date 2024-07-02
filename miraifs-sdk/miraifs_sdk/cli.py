@@ -289,27 +289,21 @@ def create(
 ):
     """
     Initialize a file upload by creating a MiraiFS `File` object
-    that contains file metadata and the expected file chunk hashes.
+    that contains file's MIME type and the expected file chunk hashes.
     """
     mfs = MiraiFs()
 
     with open(path, "rb") as f:
         data = f.read()
 
-    # Calculate the hash of the original uncompressed file.
-    original_file_hash = calculate_hash_u256(data)
-    print(f"File Hash: {original_file_hash}")
-
-    data_to_upload = data
-
-    chunks = chunk_bytes(data_to_upload, 32768)
+    # Split the file data into 32KB chunks.
+    chunks = chunk_bytes(data, 32768)
+    # Calculate the hash of each chunk.
     chunk_hashes = [calculate_hash_u256(b) for b in chunks]
-
-    file_size_bytes = len(data)
     mime_type, _ = mimetypes.guess_type(path)
 
     # print(file_upload_data.model_dump(exclude=["chunk_hashes"]))
-    print(f"\nFile Size: {file_size_bytes}B ({round(file_size_bytes / 1024)}KB)")
+    print(f"\nFile Size: {len(data)}B ({round(len(data) / 1024)}KB)")
     print(f"File Chunks: {len(chunks)}")
 
     if not confirm:
@@ -324,7 +318,7 @@ def create(
         transient=True,
     ) as progress:
         progress.add_task(description="Broadcasting transaction...", total=2)
-        result = mfs.create_file(chunk_hashes, mime_type)
+    result = mfs.create_file(chunk_hashes, mime_type)
 
     if isinstance(result, TxResponse):
         file_created_event_data = None
