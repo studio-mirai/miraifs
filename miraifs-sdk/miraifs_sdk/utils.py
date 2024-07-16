@@ -14,6 +14,28 @@ def get_zstd_version():
     return output
 
 
+def bytes_to_u256(
+    data: bytes,
+):
+    return int.from_bytes(data, "big")
+
+
+def int_to_bytes(
+    number: int,
+):
+    """
+    Convert an integer to its byte representation covering u8 to u256.
+
+    Args:
+    number (int): The integer to be converted to bytes.
+
+    Returns:
+    bytes: The byte representation of the integer.
+    """
+    num_bytes = (number.bit_length() + 7) // 8
+    return number.to_bytes(num_bytes, byteorder="big")
+
+
 def encode_file(
     data: bytes,
     encoding: str,
@@ -34,12 +56,18 @@ def encode_file(
     return file_bytes.decode("utf-8")
 
 
+def calculate_hash_str(
+    data: bytes,
+) -> str:
+    hash = hashlib.blake2b(data, digest_size=32).hexdigest()
+    return hash
+
+
 def calculate_hash_u256(
     data: bytes,
 ) -> int:
     hash = hashlib.blake2b(data, digest_size=32)
-    hash_u256 = int.from_bytes(hash.digest(), "big")
-    return hash_u256
+    return bytes_to_u256(hash.digest())
 
 
 def calculate_hash_for_bytes(
@@ -78,6 +106,20 @@ def chunk_file_data(
     data: str,
     chunk_size: int = 220,
 ) -> list[bytes]:
+    return [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)]
+
+
+def chunk_data(
+    data: Any,
+    chunk_size: int,
+):
+    return [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)]
+
+
+def split_bytes(
+    data: bytes,
+    chunk_size: int,
+):
     return [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)]
 
 
