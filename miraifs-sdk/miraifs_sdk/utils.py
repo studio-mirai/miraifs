@@ -32,6 +32,8 @@ def int_to_bytes(
     Returns:
     bytes: The byte representation of the integer.
     """
+    if number == 0:
+        return b"\x00"
     num_bytes = (number.bit_length() + 7) // 8
     return number.to_bytes(num_bytes, byteorder="big")
 
@@ -70,7 +72,7 @@ def calculate_hash_u256(
     return bytes_to_u256(hash.digest())
 
 
-def calculate_hash_for_bytes(
+def calculate_hash(
     data: bytes,
 ) -> blake2b:
     hash = hashlib.blake2b(data, digest_size=32)

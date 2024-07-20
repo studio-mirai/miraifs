@@ -1,28 +1,27 @@
 module miraifs::chunk {
-    
-    use sui::bcs::{to_bytes};
 
-    use miraifs::utils::{calculate_hash};
+    use miraifs::utils::{calculate_chunk_identifier_hash, calculate_hash};
 
     public struct Chunk has key, store {
         id: UID,
-        partitions: vector<vector<u8>>,
-        hash: u256,
-        index: u64,
+        data: vector<u8>,
+        hash: vector<u8>,
+        file_id: ID,
+        index: u16,
         is_verified: bool,
-        size: u64,
+        size: u32,
     }
 
     public struct CreateChunkCap has key, store {
         id: UID,
         file_id: ID,
-        index: u64,
-        hash: u256,
+        index: u16,
+        hash: vector<u8>,
     }
 
     public struct RegisterChunkCap has key, store {
         id: UID,
-        chunk_hash: u256,
+        chunk_hash: vector<u8>,
         chunk_id: ID,
         file_id: ID,
     }
@@ -38,19 +37,19 @@ module miraifs::chunk {
 
     public fun new(
         cap: CreateChunkCap,
-        hash: u256,
-        index: u64,
-        size: u64,
+        hash: vector<u8>,
+        index: u16,
         verify_hash: bool,
         ctx: &mut TxContext,
     ): (Chunk, VerifyChunkCap) {
         let chunk = Chunk {
             id: object::new(ctx),
-            partitions: vector::empty(),
+            data: vector::empty(),
+            file_id: cap.file_id,
             hash: hash,
             index: index,
             is_verified: false,
-            size: size,
+            size: 0,
         };
 
         let verify_chunk_cap = VerifyChunkCap {
@@ -70,11 +69,15 @@ module miraifs::chunk {
         (chunk, verify_chunk_cap)
     }
 
-    public fun add_partition(
+    public fun add_data(
         chunk: &mut Chunk,
-        partition: vector<u8>,
+        mut data: vector<vector<u8>>,
     ) {
-        chunk.partitions.push_back(partition);
+        while (!data.is_empty()) {
+            let partition = data.pop_back();
+            chunk.size = chunk.size + (partition.length() as u32);
+            chunk.data.append(partition);
+        }
     }
 
     public fun delete(
@@ -82,15 +85,14 @@ module miraifs::chunk {
     ) {
         let Chunk {
             id,
-            partitions,
+            mut data,
+            file_id,
             hash: _,
             index: _,
             is_verified: _,
             size: _,
         } = chunk;
-
         id.delete();
-        partitions.destroy_empty();
     }
 
     // Verification function that's called after all partitions have been added
@@ -106,32 +108,17 @@ module miraifs::chunk {
         mut chunk: Chunk,
         ctx: &mut TxContext,
     ) {
-        let mut chunk_size: u64 = 0;
-        let mut concat_partitions: vector<u8> = vector[];
-        
-        let mut i: u64 = 0;
-        while (i < chunk.partitions.length()) {
-            let partition = chunk.partitions[i];
-            chunk_size = chunk_size + partition.length();
-            if (cap.verify_hash == true) {
-                concat_partitions.append(partition);
-            };
-            i = i + 1;
-        };
-        assert!(chunk_size == chunk.size, EChunkLengthMismatch);
-
-        if (!concat_partitions.is_empty()) {
-            let chunk_bytes_hash = calculate_hash(&concat_partitions);
-            let chunk_hash = calculate_chunk_identifier_hash(chunk.index, chunk_bytes_hash);
-            assert!(chunk_hash == chunk.hash, EChunkHashMismatch);
-            chunk.is_verified = true;
-        };
+        let chunk_bytes_hash = calculate_hash(&chunk.data);
+        let chunk_hash = calculate_chunk_identifier_hash(chunk.index, chunk_bytes_hash);
+        assert!(chunk_hash == chunk.hash, EChunkHashMismatch);
+        chunk.is_verified = true;
+       
 
         let register_chunk_cap = RegisterChunkCap {
             id: object::new(ctx),
             chunk_hash: chunk.hash,
             chunk_id: object::id(&chunk),
-            file_id: cap.file_id,
+            file_id: chunk.file_id,
         };
 
         transfer::public_transfer(chunk, cap.file_id.to_address());
@@ -146,8 +133,8 @@ module miraifs::chunk {
 
     public(package) fun new_create_chunk_cap(
         file_id: ID,
-        hash: u256,
-        index: u64,
+        hash: vector<u8>,
+        index: u16,
         ctx: &mut TxContext,
     ): CreateChunkCap {
         let cap = CreateChunkCap {
@@ -160,7 +147,7 @@ module miraifs::chunk {
         cap
     }
 
-     public(package) fun delete_register_chunk_cap(
+    public(package) fun delete_register_chunk_cap(
         cap: RegisterChunkCap,
     ) {
         let RegisterChunkCap {
@@ -172,9 +159,15 @@ module miraifs::chunk {
         id.delete()
     }
 
+    public(package) fun create_chunk_cap_id(
+        cap: &CreateChunkCap,
+    ): ID {
+        object::id(cap)
+    }
+
     public(package) fun register_chunk_cap_chunk_hash(
         cap: &RegisterChunkCap,
-    ): u256 {
+    ): vector<u8> {
         cap.chunk_hash
     }
 
@@ -188,16 +181,5 @@ module miraifs::chunk {
         cap: &RegisterChunkCap,
     ): ID {
         cap.file_id
-    }
-
-    // Create a unique identifier hash by combining chunk index and chunk bytes hash.
-    fun calculate_chunk_identifier_hash(
-        chunk_index: u64,
-        chunk_hash: u256,
-    ): u256 {
-        let mut v: vector<u8> = vector[];
-        v.append(to_bytes<u64>(&chunk_index));
-        v.append(to_bytes<u256>(&chunk_hash));
-        calculate_hash(&v)
     }
 }
