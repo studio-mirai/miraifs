@@ -1,13 +1,7 @@
 module miraifs::utils {
 
     use sui::bcs::{to_bytes};
-    use sui::event;
     use sui::hash::{blake2b256};
-
-    public struct ChunkIdentifierHashCalculatedEvent has copy, drop {
-        input: vector<u8>,
-        hash: vector<u8>,
-    }
 
     // Create a unique identifier hash by combining chunk index and chunk bytes hash.
     public(package) fun calculate_chunk_identifier_hash(
@@ -19,14 +13,7 @@ module miraifs::utils {
         let mut v: vector<u8> = vector[];
         v.append(chunk_index_bytes);
         v.append(chunk_hash);
-        let hash = calculate_hash(&v);
-        event::emit(
-            ChunkIdentifierHashCalculatedEvent {
-                input: chunk_index_bytes,
-                hash: hash,
-            }
-        );
-        hash
+        calculate_hash(&v)
     }
 
     public(package) fun calculate_hash(
@@ -40,7 +27,7 @@ module miraifs::utils {
         recipient: address,
     ) {
         while (!objs.is_empty()) {
-            transfer::public_transfer(objs.remove(0), recipient);
+            transfer::public_transfer(objs.pop_back(), recipient);
         };
         objs.destroy_empty();
     }
