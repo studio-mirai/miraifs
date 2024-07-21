@@ -11,10 +11,10 @@ module miraifs::file {
     use sui::transfer::{Receiving};
     use sui::vec_map::{Self, VecMap};
 
-    use miraifs::chunk::{Self, CreateChunkCap, RegisterChunkCap};
-    use miraifs::utils::{calculate_chunk_identifier_hash, calculate_hash};
+    use miraifs::chunk::{Self, Chunk, CreateChunkCap, RegisterChunkCap};
+    use miraifs::utils::{calculate_hash};
 
-    const MAX_CHUNK_SIZE_BYTES: u32 = 128_000;
+    const MAX_CHUNK_SIZE_BYTES: u32 = 129_260;
 
     const EHashMismatch: u64 = 1;
     const EFilePromiseMismatch: u64 = 2;
@@ -26,7 +26,7 @@ module miraifs::file {
         chunks: VecMap<vector<u8>, Option<ID>>,
         created_at: u64,
         mime_type: String,
-        size: u64,
+        size: u32,
     }
 
     public struct VerifyFileCap {
@@ -94,7 +94,7 @@ module miraifs::file {
         clock: &Clock,
         ctx: &mut TxContext,
     ): (File, VerifyFileCap) {
-        assert!(chunk_size <= MAX_CHUNK_SIZE_BYTES, 1);
+        //assert!(chunk_size <= MAX_CHUNK_SIZE_BYTES, 1);
 
         let mut file = File {
             id: object::new(ctx),
@@ -141,7 +141,8 @@ module miraifs::file {
                 hash: calculate_hash(&concat_chunk_hashes_bytes),
             }
         );
-        // assert!(calculate_hash(&concat_chunk_hashes_bytes) == cap.verification_hash);
+        
+        assert!(calculate_hash(&concat_chunk_hashes_bytes) == cap.verification_hash);
 
         let VerifyFileCap {
             file_id: _,
@@ -171,15 +172,25 @@ module miraifs::file {
         let DeleteFilePromise { file_id: _, } = promise;
     }
 
-    public fun register_chunk(
+    public fun receive_and_register_chunk(
         file: &mut File,
         cap_to_receive: Receiving<RegisterChunkCap>,
     ) {
-        let cap = transfer::public_receive(&mut file.id, cap_to_receive);
+        let cap = chunk::receive_register_chunk_cap(&mut file.id, cap_to_receive);
         let chunk_hash = chunk::register_chunk_cap_chunk_hash(&cap);
         let chunk_id = chunk::register_chunk_cap_chunk_id(&cap);
         file.chunks.get_mut(&chunk_hash).fill(chunk_id);
+        file.size = file.size + cap.register_chunk_cap_size();
         chunk::delete_register_chunk_cap(cap);
+    }
+
+    public fun receive_and_delete_chunk(
+        file: &mut File,
+        chunk_to_receive: Receiving<Chunk>,
+    ) {
+        let chunk = chunk::receive_chunk(&mut file.id, chunk_to_receive);
+        file.chunks.remove(&chunk.chunk_hash());
+        chunk.delete();
     }
 
     fun id(

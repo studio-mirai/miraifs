@@ -6,8 +6,8 @@ from pathlib import Path
 import typer
 from pysui import SyncClient, SuiConfig, handle_result
 from rich import print
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from miraifs_sdk import PACKAGE_ID, DOWNLOADS_DIR
-from pysui.sui.sui_txresults.single_tx import ObjectRead
 from pysui.sui.sui_txresults.complex_tx import TxResponse
 from miraifs_sdk.miraifs import MiraiFs, Chunk
 from miraifs_sdk.utils import (
@@ -28,7 +28,10 @@ from pysui.sui.sui_types import (
 
 app = typer.Typer()
 
-MAX_CHUNK_SIZE_BYTES = 128_000
+MAX_CHUNK_SIZE_BYTES = 129_260
+
+# 2819323600 / 129260 = 21811
+# 21811 MIST/byte
 
 config = SuiConfig.default_config()
 client = SyncClient(config)
@@ -94,6 +97,8 @@ def create_chunks(
     chunks = load_chunks(path, file.chunk_size)
     chunks_by_hash = {bytes(chunk.hash): chunk for chunk in chunks}
 
+    print(f"Loaded {len(chunks)} chunks for File {file_id}")
+
     total_cost = 0
     for create_chunk_cap in file.create_chunk_caps:
         result = mfs.create_chunk(
@@ -104,14 +109,12 @@ def create_chunks(
             print(f"Uploaded Chunk #{create_chunk_cap.index}: {result.effects.transaction_digest}")  # fmt: skip
             computation_cost = int(result.effects.gas_used.computation_cost)
             storage_cost = int(result.effects.gas_used.storage_cost)
+            print(computation_cost + storage_cost)
             total_cost = total_cost + computation_cost + storage_cost
         else:
             raise Exception(f"Unable to upload Chunk #{create_chunk_cap.index}")
 
     print(f"Total Cost: {total_cost} MIST ({total_cost / 10**9} SUI)")
-
-
-# Cost: 21725 MIST/byte
 
 
 def estimate_upload_cost_in_mist(
@@ -189,7 +192,7 @@ def create(
         recipient=config.active_address,
     )
     result = handle_result(
-        txer.execute(gas_budget=50_000_000_000),
+        txer.execute(gas_budget=5_000_000_000),
     )
 
     if isinstance(result, TxResponse):
@@ -210,7 +213,7 @@ def view(
     convert_hashes: bool = typer.Option(True),
 ):
     mfs = MiraiFs()
-    file = mfs.get_file(file_id)
+    file = mfs.get_file(file_id, convert_hashes)
     print(file)
     return
 

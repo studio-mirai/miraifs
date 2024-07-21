@@ -19,6 +19,7 @@ from pysui.sui.sui_types import (
 
 from miraifs_sdk import PACKAGE_ID
 from miraifs_sdk.sui import Sui
+from miraifs_sdk.utils import split_lists_into_sublists
 
 
 class Chunk(BaseModel):
@@ -33,6 +34,7 @@ class FileObj(BaseModel):
     chunks: list["ChunkMapping"]
     create_chunk_caps: list["CreateChunkCapObj"] = []
     mime_type: str
+    size: int
 
 
 class Compression(BaseModel):
@@ -65,6 +67,7 @@ class RegisterChunkCapObj(BaseModel):
     file_id: str
     chunk_id: str
     chunk_hash: list[int]
+    size: int
 
 
 def split_list(
@@ -231,6 +234,7 @@ class MiraiFs(Sui):
                 chunk_size=file_obj_raw.content.fields["chunk_size"],
                 chunks=chunks,
                 mime_type=file_obj_raw.content.fields["mime_type"],
+                size=file_obj_raw.content.fields["size"],
             )
         try:
             create_chunk_cap_df_obj = handle_result(
@@ -266,25 +270,32 @@ class MiraiFs(Sui):
                 )
             )
             if isinstance(create_chunk_cap_df_obj, ObjectRead):
-                create_chunk_cap_ids = create_chunk_cap_df_obj.content.fields["value"]
-                create_chunk_cap_objs_raw = handle_result(
-                    self.client.execute(
-                        GetMultipleObjects(
-                            object_ids=[ObjectID(id) for id in create_chunk_cap_ids]
-                        )
+                create_chunk_cap_objs: list[CreateChunkCapObj] = []
+                # Split create_chunk_cap_ids into lists of 50 IDs
+                # because GetMultipleObjects accepts a maximum of 50 object IDs at a time.
+                create_chunk_cap_id_buckets: list[list[str]] = (
+                    split_lists_into_sublists(
+                        create_chunk_cap_df_obj.content.fields["value"], 50
                     )
                 )
-                create_chunk_cap_objs: list[CreateChunkCapObj] = []
-                for obj in create_chunk_cap_objs_raw:
-                    if isinstance(obj, ObjectRead):
-                        create_chunk_cap = CreateChunkCapObj(
-                            id=obj.object_id,
-                            file_id=obj.content.fields["file_id"],
-                            hash=obj.content.fields["hash"],
-                            index=obj.content.fields["index"],
-                            owner=obj.owner.address_owner,
+                for bucket in create_chunk_cap_id_buckets:
+                    create_chunk_cap_objs_raw = handle_result(
+                        self.client.execute(
+                            GetMultipleObjects(
+                                object_ids=[ObjectID(id) for id in bucket]
+                            )
                         )
-                        create_chunk_cap_objs.append(create_chunk_cap)
+                    )
+                    for obj in create_chunk_cap_objs_raw:
+                        if isinstance(obj, ObjectRead):
+                            create_chunk_cap = CreateChunkCapObj(
+                                id=obj.object_id,
+                                file_id=obj.content.fields["file_id"],
+                                hash=obj.content.fields["hash"],
+                                index=obj.content.fields["index"],
+                                owner=obj.owner.address_owner,
+                            )
+                            create_chunk_cap_objs.append(create_chunk_cap)
                 create_chunk_cap_objs.sort(key=lambda x: x.index)
                 file_obj.create_chunk_caps = create_chunk_cap_objs
         except Exception:
@@ -326,6 +337,7 @@ class MiraiFs(Sui):
                         chunk_hash=obj.content.fields["chunk_hash"],
                         chunk_id=obj.content.fields["chunk_id"],
                         file_id=obj.content.fields["file_id"],
+                        size=obj.content.fields["size"],
                     )
                     register_chunk_cap_objs.append(register_chunk_cap_obj)
 
