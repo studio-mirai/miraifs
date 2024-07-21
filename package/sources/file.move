@@ -16,9 +16,11 @@ module miraifs::file {
 
     const MAX_CHUNK_SIZE_BYTES: u32 = 129_260;
 
-    const EHashMismatch: u64 = 1;
-    const EFilePromiseMismatch: u64 = 2;
-    const EChunksNotDeleted: u64 = 3;
+    const EChunksNotDeleted: u64 = 1;
+    const EInvalidVerifyFileCapForFile: u64 = 2;
+    const EFilePromiseMismatch: u64 = 3;
+    const EMaxChunkSizeExceeded: u64 = 4;
+    const EVerificationHashMismatch: u64 = 5;
 
     public struct File has key, store {
         id: UID,
@@ -59,7 +61,7 @@ module miraifs::file {
         hash: vector<u8>,
         ctx: &mut TxContext,
     ): CreateChunkCap {
-        assert!(verify_file_cap.file_id == file.id());
+        assert!(verify_file_cap.file_id == object::id(file), EInvalidVerifyFileCapForFile);
 
         // let chunk_identifier_hash = calculate_chunk_identifier_hash(index, hash);
         let create_chunk_cap = chunk::new_create_chunk_cap(
@@ -94,7 +96,7 @@ module miraifs::file {
         clock: &Clock,
         ctx: &mut TxContext,
     ): (File, VerifyFileCap) {
-        //assert!(chunk_size <= MAX_CHUNK_SIZE_BYTES, 1);
+        assert!(chunk_size <= MAX_CHUNK_SIZE_BYTES, EMaxChunkSizeExceeded);
 
         let mut file = File {
             id: object::new(ctx),
@@ -114,7 +116,7 @@ module miraifs::file {
 
         event::emit(
             FileCreatedEvent {
-                file_id: file.id(),
+                file_id: object::id(&file),
             }
         );
 
@@ -125,7 +127,7 @@ module miraifs::file {
         cap: VerifyFileCap,
         file: &File,
     ) {
-        assert!(cap.file_id == object::id(file), 1);
+        assert!(cap.file_id == object::id(file), EInvalidVerifyFileCapForFile);
 
         let mut concat_chunk_hashes_bytes: vector<u8> = vector[];
         let mut i = 0;
@@ -142,7 +144,7 @@ module miraifs::file {
             }
         );
         
-        assert!(calculate_hash(&concat_chunk_hashes_bytes) == cap.verification_hash);
+        assert!(calculate_hash(&concat_chunk_hashes_bytes) == cap.verification_hash, EVerificationHashMismatch);
 
         let VerifyFileCap {
             file_id: _,
@@ -191,12 +193,6 @@ module miraifs::file {
         let chunk = chunk::receive_chunk(&mut file.id, chunk_to_receive);
         file.chunks.remove(&chunk.chunk_hash());
         chunk.delete();
-    }
-
-    fun id(
-        file: &File,
-    ): ID {
-        object::id(file)
     }
 
     #[test]
