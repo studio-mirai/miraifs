@@ -120,6 +120,18 @@ def estimate_upload_cost_in_mist(
 
 
 @app.command()
+def register_chunks(
+    file_id: str = typer.Argument(),
+):
+    mfs = MiraiFs()
+    file_obj = mfs.get_file(file_id)
+    register_chunk_cap_objs = mfs.get_register_chunk_cap_objs(file_obj)
+    result = mfs.register_chunks(file_obj, register_chunk_cap_objs)
+    print(result)
+    return
+
+
+@app.command()
 def create(
     path: Path = typer.Argument(...),
     chunk_size: int = typer.Option(MAX_CHUNK_SIZE_BYTES),
@@ -194,6 +206,7 @@ def create(
 @app.command()
 def view(
     file_id: str = typer.Argument(),
+    convert_hashes: bool = typer.Option(True),
 ):
     mfs = MiraiFs()
     file = mfs.get_file(file_id)
