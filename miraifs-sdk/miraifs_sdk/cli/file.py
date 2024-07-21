@@ -49,7 +49,7 @@ logging.basicConfig(level=logging.WARN)
 app = typer.Typer()
 
 
-TEST_PACKAGE_ID = "0xe44f087aecb0baa358934c0d7e3c26ccf8b82b10538cb0cf0447ce7fb6e70a36"
+TEST_PACKAGE_ID = "0x4ef277381d8fb3b94d9055473ca4381945d136d2555eaa5c19fe39fe85053316"
 MAX_CHUNK_SIZE_BYTES = 250_000
 
 config = SuiConfig.default_config()
@@ -64,51 +64,10 @@ class ChunkMetadata(BaseModel):
 def calculate_unique_chunk_hash(
     chunk_hash: bytes,
     chunk_index: int,
-) -> bytes:
+) -> blake2b:
     chunk_index_bytes = b"\x00" + int_to_bytes(chunk_index)
-    print(f"Identifier Hash Input: {list(chunk_index_bytes + chunk_hash)}")
-    chunk_identifier_hash = calculate_hash(chunk_index_bytes + chunk_hash)  # fmt: skip
-    return chunk_identifier_hash
-
-
-@app.command()
-def sui():
-    print(list(int_to_bytes(12345)))
-    return
-
-
-class Chunk(BaseModel):
-    index: int
-    data: bytes
-    hash: bytes
-    size: int
-
-
-@app.command()
-def verify(
-    partition_id: str = typer.Argument(...),
-):
-    txer = SuiTransaction(
-        client=client,
-        compress_inputs=True,
-        merge_gas_budget=True,
-    )
-    txer.move_call(
-        target=f"{TEST_PACKAGE_ID}::test::verify",
-        arguments=[
-            ObjectID(partition_id),
-        ],
-    )
-    result = handle_result(
-        txer.execute(gas_budget=10_000_000_000),
-    )
-    print(result.effects.status)
-    print(result.effects.created)
-    print(result.events)
-    print(f"Computation Cost: {int(result.effects.gas_used.computation_cost) / 10**9} SUI")  # fmt: skip
-    print(f"Storage Cost: {int(result.effects.gas_used.storage_cost) / 10**9} SUI")  # fmt: skip
-    print(f"Storage Rebate: {int(result.effects.gas_used.storage_rebate) / 10**9} SUI")  # fmt: skip
-    return
+    logging.debug(f"Identifier Hash Input: {list(chunk_index_bytes + chunk_hash)}")
+    return calculate_hash(chunk_index_bytes + chunk_hash)
 
 
 # 14496 MIST/byte
@@ -118,10 +77,44 @@ def verify(
 
 
 @app.command()
+def create_chunks(
+    file_id: str = typer.Argument(),
+    path: Path = typer.Argument(),
+    chunk_size: int = typer.Option(250_000),
+):
+    mfs = MiraiFs()
+    file = mfs.get_file(file_id)
+
+    with open(path, "rb") as f:
+        data = f.read()
+
+    chunked_data = chunk_data(data, chunk_size)
+
+    chunks: list[Chunk] = []
+    for i, data_chunk in enumerate(chunked_data):
+        chunk_data_hash = calculate_hash(data_chunk).digest()
+        chunk = Chunk(
+            data=list(data_chunk),
+            hash=list(calculate_unique_chunk_hash(chunk_data_hash, i).digest()),
+            index=i,
+        )
+        chunks.append(chunk)
+
+    chunks_by_hash = {bytes(chunk.hash): chunk for chunk in chunks}
+
+    for create_chunk_cap in file.create_chunk_caps:
+        result = mfs.create_chunk(
+            create_chunk_cap,
+            chunks_by_hash[bytes(create_chunk_cap.hash)],
+        )
+        print(result.effects.status)
+
+
+@app.command()
 def u256():
     txer = SuiTransaction(
         client=client,
-        compress_inputs=True,
+        # compress_inputs=True,
         merge_gas_budget=True,
     )
     chunk = txer.move_call(
@@ -174,11 +167,11 @@ def create(
 
     chunks: list[Chunk] = []
     for i, data_chunk in enumerate(chunked_data):
+        chunk_data_hash = calculate_hash(data_chunk).digest()
         chunk = Chunk(
+            data=list(data_chunk),
+            hash=list(calculate_unique_chunk_hash(chunk_data_hash, i).digest()),
             index=i,
-            data=data_chunk,
-            hash=calculate_hash(data_chunk).digest(),
-            size=len(data_chunk),
         )
         chunks.append(chunk)
     # [0, 0, 115, 157, 226, 25, 45, 5, 184, 29, 66, 168, 78, 21, 82, 7, 47, 21, 27, 178, 191, 118, 241, 115, 10, 13, 206, 200, 14, 80, 204, 138, 3, 197]
@@ -242,6 +235,16 @@ def create(
     print(f"Computation Cost: {int(result.effects.gas_used.computation_cost) / 10**9} SUI")  # fmt: skip
     print(f"Storage Cost: {int(result.effects.gas_used.storage_cost) / 10**9} SUI")  # fmt: skip
     print(f"Storage Rebate: {int(result.effects.gas_used.storage_rebate) / 10**9} SUI")  # fmt: skip
+    return
+
+
+@app.command()
+def view(
+    file_id: str = typer.Argument(),
+):
+    mfs = MiraiFs()
+    file = mfs.get_file(file_id)
+    print(file)
     return
 
 

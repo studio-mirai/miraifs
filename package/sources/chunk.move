@@ -29,8 +29,9 @@ module miraifs::chunk {
     public struct VerifyChunkCap {
         chunk_id: ID,
         file_id: ID,
-        verify_hash: bool,
     }
+
+    const MAX_CHUNK_SIZE_BYTES: u64 = 250_000;
 
     const EChunkHashMismatch: u64 = 1;
     const EChunkLengthMismatch: u64 = 2;
@@ -39,7 +40,6 @@ module miraifs::chunk {
         cap: CreateChunkCap,
         hash: vector<u8>,
         index: u16,
-        verify_hash: bool,
         ctx: &mut TxContext,
     ): (Chunk, VerifyChunkCap) {
         let chunk = Chunk {
@@ -55,7 +55,6 @@ module miraifs::chunk {
         let verify_chunk_cap = VerifyChunkCap {
             chunk_id: object::id(&chunk),
             file_id: cap.file_id,
-            verify_hash: verify_hash,
         };
 
         let CreateChunkCap {
@@ -127,7 +126,6 @@ module miraifs::chunk {
         let VerifyChunkCap {
             chunk_id: _,
             file_id: _,
-            verify_hash: _,
         } = cap;
     }
 

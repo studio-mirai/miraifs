@@ -5,28 +5,22 @@ module miraifs::file {
 
     use std::string::{String};
 
-    use sui::bcs::{to_bytes};
     use sui::clock::{Clock};
     use sui::dynamic_field::{Self as df};
     use sui::event;
-    use sui::hash::{blake2b256};
-    use sui::hex;
-    use sui::table::{Self, Table};
     use sui::transfer::{Receiving};
     use sui::vec_map::{Self, VecMap};
-    use sui::vec_set::{Self};
 
     use miraifs::chunk::{Self, CreateChunkCap, RegisterChunkCap};
-    use miraifs::utils::{calculate_chunk_identifier_hash, calculate_hash};
+    use miraifs::utils::{bytes_to_hex_string, calculate_chunk_identifier_hash, calculate_hash, hex_string_to_bytes};
 
     const EHashMismatch: u64 = 1;
     const EFilePromiseMismatch: u64 = 2;
     const EChunksNotDeleted: u64 = 3;
 
-    const MAX_CHUNK_SIZE_BYTES: u64 = 32768;
-
     public struct File has key, store {
         id: UID,
+        chunk_size: u16,
         chunks: VecMap<vector<u8>, Option<ID>>,
         created_at: u64,
         mime_type: String,
@@ -39,18 +33,8 @@ module miraifs::file {
         verification_hash: vector<u8>,
     }
 
-    public struct VerifyFileCapCreatedEvent has copy, drop {
-        file_id: ID,
-        chunk_count: u16,
-    }
-
     public struct FileCreatedEvent has copy, drop {
         file_id: ID,
-    }
-
-    public struct FileVerifiedEvent has copy, drop {
-        bytes: vector<u8>,
-        hash: vector<u8>,
     }
 
     public struct FileChunkAddedEvent has copy, drop {
@@ -69,6 +53,7 @@ module miraifs::file {
         ctx: &mut TxContext,
     ): CreateChunkCap {
         assert!(verify_file_cap.file_id == file.id());
+
         let index = (file.chunks.size() as u16);
         let chunk_identifier_hash = calculate_chunk_identifier_hash(index, hash);
         let create_chunk_cap = chunk::new_create_chunk_cap(
@@ -77,17 +62,27 @@ module miraifs::file {
             index,
             ctx,
         );
-        file.chunks.insert(chunk_identifier_hash, option::none());
+
+        let create_chunk_cap_ids: &mut vector<ID> = df::borrow_mut(&mut file.id, b"create_chunk_cap_ids");
+        create_chunk_cap_ids.push_back(object::id(&create_chunk_cap));
+        
+        file.chunks.insert(
+            chunk_identifier_hash,
+            option::none(),
+        );
+
         event::emit(
             FileChunkAddedEvent {
                 file_id: object::id(file),
                 create_chunk_cap_id: create_chunk_cap.create_chunk_cap_id(),
             }
         );
+
         create_chunk_cap
     }
 
     public fun new(
+        chunk_size: u16,
         mime_type: String,
         verification_hash: vector<u8>,
         clock: &Clock,
@@ -95,13 +90,14 @@ module miraifs::file {
     ): (File, VerifyFileCap) {
         let mut file = File {
             id: object::new(ctx),
+            chunk_size: chunk_size,
             chunks: vec_map::empty(),
             created_at: clock.timestamp_ms(),
             mime_type: mime_type,
             size: 0,
         };
 
-        df::add(&mut file.id, b"create_chunk_cap_ids".to_string(), vec_set::empty<ID>());
+        df::add(&mut file.id, b"create_chunk_cap_ids", vector<ID>[]);
 
         let verify_file_cap = VerifyFileCap {
             file_id: object::id(&file),
@@ -131,8 +127,7 @@ module miraifs::file {
             i = i + 1;
         };
 
-        let verification_hash = calculate_hash(&concat_chunk_hashes_bytes);
-        assert!(verification_hash == cap.verification_hash);
+        assert!(calculate_hash(&concat_chunk_hashes_bytes) == cap.verification_hash);
 
         let VerifyFileCap {
             file_id: _,
@@ -149,6 +144,7 @@ module miraifs::file {
 
         let File {
             id,
+            chunk_size: _,
             chunks,
             created_at: _,
             mime_type: _,

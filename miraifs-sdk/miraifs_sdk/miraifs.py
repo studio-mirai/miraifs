@@ -2,22 +2,25 @@ import logging
 
 from pydantic import BaseModel
 from pysui import handle_result
-from pysui.sui.sui_builders.get_builders import GetDynamicFieldObject, GetDynamicFields
+from pysui.sui.sui_builders.get_builders import (
+    GetDynamicFieldObject,
+    GetMultipleObjects,
+)
 from pysui.sui.sui_txn.sync_transaction import SuiTransaction
-from pysui.sui.sui_txresults.complex_tx import TxResponse
 from pysui.sui.sui_txresults.single_tx import ObjectRead
 from pysui.sui.sui_types import (
     ObjectID,
     SuiBoolean,
     SuiString,
     SuiU8,
+    SuiU16,
     SuiU64,
     SuiU256,
 )
 
 from miraifs_sdk import PACKAGE_ID
-from miraifs_sdk.sui import GasCoin, Sui
-from miraifs_sdk.utils import to_mist, calculate_hash_str
+from miraifs_sdk.sui import Sui
+from miraifs_sdk.utils import calculate_hash_str, chunk_data
 
 logging.basicConfig(level=logging.INFO)
 
@@ -25,6 +28,7 @@ logging.basicConfig(level=logging.INFO)
 class File(BaseModel):
     id: str
     chunks: list["ChunkMapping"]
+    create_chunk_caps: list["CreateChunkCap"] = []
     mime_type: str
 
 
@@ -34,21 +38,22 @@ class Compression(BaseModel):
 
 
 class Chunk(BaseModel):
-    id: str
+    id: str | None = None
     index: int
-    hash: int
-    data: list[str]
+    hash: list[int]
+    data: list[int]
 
 
 class CreateChunkCap(BaseModel):
     id: str
-    index: int
-    hash: int
     file_id: str
+    hash: list[int]
+    index: int
+    owner: str
 
 
 class ChunkMapping(BaseModel):
-    key: str
+    key: list[int]
     value: str | None = None
 
 
@@ -75,30 +80,37 @@ class MiraiFs(Sui):
 
     def create_chunk(
         self,
-        chunk_elements: list[list[int]],
+        create_chunk_cap: CreateChunkCap,
+        chunk: Chunk,
     ):
         txer = SuiTransaction(
             client=self.client,
             compress_inputs=True,
         )
 
-        chunk_element_hashes = txer.make_move_vector(
-            items=[SuiString(calculate_hash_str(e)) for e in chunk_elements],
-            item_type="u256",
-        )
-
         chunk = txer.move_call(
-            target=f"{PACKAGE_ID}::test::new",
-            arguments=[chunk_element_hashes],
+            target=f"{PACKAGE_ID}::chunk::new",
+            arguments=[
+                ObjectID(create_chunk_cap.id),
+                [SuiU8(n) for n in create_chunk_cap.hash],
+                SuiU16(ObjectID(create_chunk_cap.index)),
+            ],
         )
 
-        for e in chunk_elements:
+        for bucket in [chunk.data[i : i + 500] for i in range(0, len(chunk.data), 500)]:
             txer.move_call(
-                target=f"{PACKAGE_ID}::test::insert_data",
-                arguments=[chunk],
+                target=f"{PACKAGE_ID}::chunk::add_data",
+                arguments=[chunk, [SuiU8(n) for n in bucket]],
             )
 
-        return
+        txer.move_call(
+            target=f"{PACKAGE_ID}::chunk::add_data",
+            arguments=[chunk],
+        )
+
+        result = handle_result(txer.execute(gas_budget=10_000_000_000))
+
+        return result
 
     def create_file(
         self,
@@ -149,3 +161,81 @@ class MiraiFs(Sui):
         )
 
         return result
+
+    def get_file(
+        self,
+        file_id: str,
+    ):
+        file_obj = handle_result(self.client.get_object(ObjectID(file_id)))
+
+        create_chunk_cap_df_obj = handle_result(
+            self.client.execute(
+                GetDynamicFieldObject(
+                    parent_object_id=ObjectID(file_id),
+                    name={
+                        "type": "vector<u8>",
+                        "value": [
+                            99,
+                            114,
+                            101,
+                            97,
+                            116,
+                            101,
+                            95,
+                            99,
+                            104,
+                            117,
+                            110,
+                            107,
+                            95,
+                            99,
+                            97,
+                            112,
+                            95,
+                            105,
+                            100,
+                            115,
+                        ],
+                    },
+                )
+            )
+        )
+
+        if isinstance(file_obj, ObjectRead):
+            chunks = [
+                ChunkMapping(
+                    key=chunk["fields"]["key"],
+                    value=chunk["fields"]["value"],
+                )
+                for chunk in file_obj.content.fields["chunks"]["fields"]["contents"]
+            ]
+            file = File(
+                id=file_obj.object_id,
+                chunks=chunks,
+                mime_type=file_obj.content.fields["mime_type"],
+            )
+
+        if isinstance(create_chunk_cap_df_obj, ObjectRead):
+            create_chunk_cap_ids = create_chunk_cap_df_obj.content.fields["value"]
+            create_chunk_cap_objs = handle_result(
+                self.client.execute(
+                    GetMultipleObjects(
+                        object_ids=[ObjectID(id) for id in create_chunk_cap_ids]
+                    )
+                )
+            )
+            create_chunk_caps: list[CreateChunkCap] = []
+            for obj in create_chunk_cap_objs:
+                if isinstance(obj, ObjectRead):
+                    create_chunk_cap = CreateChunkCap(
+                        id=obj.object_id,
+                        file_id=obj.content.fields["file_id"],
+                        hash=obj.content.fields["hash"],
+                        index=obj.content.fields["index"],
+                        owner=obj.owner.address_owner,
+                    )
+                    create_chunk_caps.append(create_chunk_cap)
+            create_chunk_caps.sort(key=lambda x: x.index)
+            file.create_chunk_caps = create_chunk_caps
+
+        return file

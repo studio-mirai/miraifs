@@ -75,8 +75,7 @@ def calculate_hash_u256(
 def calculate_hash(
     data: bytes,
 ) -> blake2b:
-    hash = hashlib.blake2b(data, digest_size=32)
-    return hash
+    return hashlib.blake2b(data, digest_size=32)
 
 
 def chunk_bytes(

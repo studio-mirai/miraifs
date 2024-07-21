@@ -1,13 +1,10 @@
 module miraifs::utils {
 
-    use std::debug;
+    use std::string::{String};
 
-    use sui::address::{from_bytes};
     use sui::bcs::{to_bytes};
-    use sui::event;
     use sui::hash::{blake2b256};
     use sui::hex;
-    use sui::tx_context;
 
     public struct ChunkIdentifierHashCalculatedEvent has copy, drop {
         input: vector<u8>,
@@ -33,6 +30,18 @@ module miraifs::utils {
         bytes: &vector<u8>,
     ): vector<u8> {
         blake2b256(bytes)
+    }
+
+    public(package) fun bytes_to_hex_string(
+        bytes: vector<u8>,
+    ): String {
+        hex::encode(bytes).to_string()
+    }
+
+    public(package) fun hex_string_to_bytes(
+        s: String,
+    ): vector<u8> {
+        hex::decode(*s.bytes())
     }
 
     public fun transfer_objs<T: key + store>(
