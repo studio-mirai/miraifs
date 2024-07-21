@@ -1,53 +1,24 @@
-import magic
-import mimetypes
+import json
 import logging
+import mimetypes
 from hashlib import blake2b
 from pathlib import Path
+
+import magic
 import typer
-from pysui import SyncClient, SuiConfig, handle_result
-from rich import print
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from miraifs_sdk import PACKAGE_ID, DOWNLOADS_DIR
-from pysui.sui.sui_txresults.complex_tx import TxResponse
-from miraifs_sdk.miraifs import MiraiFs, Chunk
-from miraifs_sdk.utils import (
-    calculate_hash,
-    int_to_bytes,
-    chunk_data,
-)
-import json
-
+from miraifs_sdk import DOWNLOADS_DIR, MAX_CHUNK_SIZE_BYTES, PACKAGE_ID
+from miraifs_sdk.miraifs import Chunk, MiraiFs
+from miraifs_sdk.utils import calculate_hash, chunk_data, int_to_bytes
+from pysui import SuiConfig, SyncClient, handle_result
 from pysui.sui.sui_txn.sync_transaction import SuiTransaction
-from pysui.sui.sui_types import (
-    SuiU8,
-    SuiU32,
-    SuiString,
-    ObjectID,
-)
-
+from pysui.sui.sui_txresults.complex_tx import TxResponse
+from pysui.sui.sui_types import ObjectID, SuiString, SuiU8, SuiU32
+from rich import print
 
 app = typer.Typer()
 
-MAX_CHUNK_SIZE_BYTES = 128_000
-
-# 2819323600 / 129260 = 21811
-# 21811 MIST/byte
-
 config = SuiConfig.default_config()
 client = SyncClient(config)
-
-
-def print_tx_result(result):
-    print(result.effects.status)
-    print(result.effects.created)
-    print(result.events)
-    computation_cost = int(result.effects.gas_used.computation_cost)
-    storage_cost = int(result.effects.gas_used.storage_cost)
-    total_cost = computation_cost + storage_cost
-    print(f"Computation Cost: {computation_cost / 10**9} SUI ({computation_cost})")  # fmt: skip
-    print(f"Storage Cost: {storage_cost / 10**9} SUI ({storage_cost})")  # fmt: skip
-    print(f"Storage Rebate: {int(result.effects.gas_used.storage_rebate) / 10**9} SUI")  # fmt: skip
-    print(f"Total Cost: {total_cost} MIST ({total_cost / 10**9} SUI)")
 
 
 def calculate_unique_chunk_hash(
@@ -208,13 +179,24 @@ def create(
 
 
 @app.command()
+def delete(
+    file_id: str = typer.Argument(),
+):
+    mfs = MiraiFs()
+    file_obj = mfs.get_file(file_id)
+    result = mfs.delete_file(file_obj)
+    print(result)
+    return
+
+
+@app.command()
 def view(
     file_id: str = typer.Argument(),
     convert_hashes: bool = typer.Option(True),
 ):
     mfs = MiraiFs()
-    file = mfs.get_file(file_id, convert_hashes)
-    print(file)
+    file_obj = mfs.get_file(file_id, convert_hashes)
+    print(file_obj)
     return
 
 

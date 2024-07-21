@@ -2,8 +2,9 @@ import base64
 import hashlib
 import subprocess
 from hashlib import blake2b
-import zstandard as zstd
 from typing import Any
+
+import zstandard as zstd
 
 
 def get_zstd_version():

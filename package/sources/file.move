@@ -18,9 +18,8 @@ module miraifs::file {
 
     const EChunksNotDeleted: u64 = 1;
     const EInvalidVerifyFileCapForFile: u64 = 2;
-    const EFilePromiseMismatch: u64 = 3;
-    const EMaxChunkSizeExceeded: u64 = 4;
-    const EVerificationHashMismatch: u64 = 5;
+    const EMaxChunkSizeExceeded: u64 = 3;
+    const EVerificationHashMismatch: u64 = 4;
 
     public struct File has key, store {
         id: UID,
