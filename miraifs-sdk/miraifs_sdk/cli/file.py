@@ -28,7 +28,7 @@ from pysui.sui.sui_types import (
 
 app = typer.Typer()
 
-MAX_CHUNK_SIZE_BYTES = 129_260
+MAX_CHUNK_SIZE_BYTES = 128_000
 
 # 2819323600 / 129260 = 21811
 # 21811 MIST/byte
@@ -129,8 +129,8 @@ def register_chunks(
 ):
     mfs = MiraiFs()
     file_obj = mfs.get_file(file_id)
-    register_chunk_cap_objs = mfs.get_register_chunk_cap_objs(file_obj)
-    result = mfs.register_chunks(file_obj, register_chunk_cap_objs)
+    chunk_objs = mfs.get_chunk_objs(file_obj)
+    result = mfs.register_chunks(file_obj, chunk_objs)
     print(result)
     return
 

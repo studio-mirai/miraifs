@@ -1,7 +1,7 @@
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
-PACKAGE_ID = "0x8bc863f221c3142c314ee871c811dbf48a67b84a451c4f78473117b1cb583c75"
+PACKAGE_ID = "0xf1393d749620699a3cf54429b9dd9ae1448cdba8d6b1ccb6c2d6eec83092faed"
 
 DOWNLOADS_DIR = PROJECT_DIR / "downloads"
 

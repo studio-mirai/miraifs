@@ -88,18 +88,18 @@ class MiraiFs(Sui):
     def register_chunks(
         self,
         file_obj: FileObj,
-        register_chunk_cap_objs: list[RegisterChunkCapObj],
+        chunk_objs: list[ChunkObj],
     ):
         txer = SuiTransaction(
             client=self.client,
             merge_gas_budget=True,
         )
-        for register_chunk_cap_obj in register_chunk_cap_objs:
+        for obj in chunk_objs:
             txer.move_call(
-                target=f"{PACKAGE_ID}::file::register_chunk",
+                target=f"{PACKAGE_ID}::file::receive_and_register_chunk",
                 arguments=[
                     ObjectID(file_obj.id),
-                    ObjectID(register_chunk_cap_obj.id),
+                    ObjectID(obj.id),
                 ],
             )
         result = handle_result(txer.execute(gas_budget=10_000_000_000))
@@ -190,6 +190,33 @@ class MiraiFs(Sui):
             txer.execute(),
         )
 
+        return result
+
+    def delete_file(
+        self,
+        file: FileObj,
+    ):
+        txer = SuiTransaction(
+            client=self.client,
+            merge_gas_budget=True,
+        )
+        for chunk in file.chunks:
+            txer.move_call(
+                target=f"{PACKAGE_ID}::file::receive_and_delete_chunk",
+                arguments=[
+                    ObjectID(file.id),
+                    ObjectID(chunk.value),
+                ],
+            )
+        txer.move_call(
+            target=f"{PACKAGE_ID}::file::delete",
+            arguments=[
+                ObjectID(file.id),
+            ],
+        )
+        result = handle_result(
+            txer.execute(),
+        )
         return result
 
     def get_chunks_for_file(
@@ -302,13 +329,13 @@ class MiraiFs(Sui):
             pass
         return file_obj
 
-    def get_register_chunk_cap_objs(
+    def get_chunk_objs(
         self,
         file_obj: FileObj,
     ):
         query = {
             "filter": {
-                "StructType": f"{PACKAGE_ID}::chunk::RegisterChunkCap",
+                "StructType": f"{PACKAGE_ID}::chunk::Chunk",
             },
             "options": {
                 "showType": False,
@@ -324,21 +351,19 @@ class MiraiFs(Sui):
             address=SuiAddress(file_obj.id),
             query=query,
         )
-        register_chunk_cap_objs_raw = handle_result(
+        chunk_cap_objs_raw = handle_result(
             self.client.execute(builder),
         )
-
-        if isinstance(register_chunk_cap_objs_raw, ObjectReadPage):
-            register_chunk_cap_objs: list[RegisterChunkCapObj] = []
-            for obj in register_chunk_cap_objs_raw.data:
+        if isinstance(chunk_cap_objs_raw, ObjectReadPage):
+            chunk_cap_objs: list[ChunkObj] = []
+            for obj in chunk_cap_objs_raw.data:
                 if isinstance(obj, ObjectRead):
-                    register_chunk_cap_obj = RegisterChunkCapObj(
+                    chunk_obj = ChunkObj(
                         id=obj.object_id,
-                        chunk_hash=obj.content.fields["chunk_hash"],
-                        chunk_id=obj.content.fields["chunk_id"],
-                        file_id=obj.content.fields["file_id"],
-                        size=obj.content.fields["size"],
+                        data=obj.content.fields["data"],
+                        index=obj.content.fields["index"],
+                        hash=obj.content.fields["hash"],
                     )
-                    register_chunk_cap_objs.append(register_chunk_cap_obj)
+                    chunk_cap_objs.append(chunk_obj)
 
-            return register_chunk_cap_objs
+            return chunk_cap_objs
