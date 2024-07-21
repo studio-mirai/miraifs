@@ -1,5 +1,3 @@
-import logging
-
 from pydantic import BaseModel
 from pysui import handle_result
 from pysui.sui.sui_builders.get_builders import (
@@ -10,7 +8,6 @@ from pysui.sui.sui_txn.sync_transaction import SuiTransaction
 from pysui.sui.sui_txresults.single_tx import ObjectRead
 from pysui.sui.sui_types import (
     ObjectID,
-    SuiBoolean,
     SuiString,
     SuiU8,
     SuiU16,
@@ -20,15 +17,19 @@ from pysui.sui.sui_types import (
 
 from miraifs_sdk import PACKAGE_ID
 from miraifs_sdk.sui import Sui
-from miraifs_sdk.utils import calculate_hash_str, chunk_data
-
-logging.basicConfig(level=logging.INFO)
 
 
-class File(BaseModel):
+class Chunk(BaseModel):
+    data: list[int]
+    hash: list[int]
+    index: int
+
+
+class FileObj(BaseModel):
     id: str
+    chunk_size: int
     chunks: list["ChunkMapping"]
-    create_chunk_caps: list["CreateChunkCap"] = []
+    create_chunk_caps: list["CreateChunkCapObj"] = []
     mime_type: str
 
 
@@ -37,14 +38,14 @@ class Compression(BaseModel):
     level: int | None = None
 
 
-class Chunk(BaseModel):
+class ChunkObj(BaseModel):
     id: str | None = None
     index: int
     hash: list[int]
     data: list[int]
 
 
-class CreateChunkCap(BaseModel):
+class CreateChunkCapObj(BaseModel):
     id: str
     file_id: str
     hash: list[int]
@@ -57,21 +58,23 @@ class ChunkMapping(BaseModel):
     value: str | None = None
 
 
-class FileUploadData(BaseModel):
-    mime_type: str
-    extension: str
-    size: int
-    hash: int
-    compression: Compression
-    chunk_hashes: list[int]
-
-
-class RegisterChunkCap(BaseModel):
+class RegisterChunkCapObj(BaseModel):
     id: str
     file_id: str
     chunk_id: str
     chunk_hash: int
     created_with: str
+
+
+def split_list(
+    input_list: list[int],
+) -> list[list[int]]:
+    main_sublists = []
+    for i in range(0, len(input_list), 10000):
+        chunk = input_list[i : i + 10000]
+        sublists = [chunk[j : j + 500] for j in range(0, len(chunk), 500)]
+        main_sublists.append(sublists)
+    return main_sublists
 
 
 class MiraiFs(Sui):
@@ -80,32 +83,41 @@ class MiraiFs(Sui):
 
     def create_chunk(
         self,
-        create_chunk_cap: CreateChunkCap,
+        create_chunk_cap: CreateChunkCapObj,
         chunk: Chunk,
     ):
         txer = SuiTransaction(
             client=self.client,
-            compress_inputs=True,
+            merge_gas_budget=True,
         )
 
-        chunk = txer.move_call(
+        chunk_arg, verify_chunk_cap_arg = txer.move_call(
             target=f"{PACKAGE_ID}::chunk::new",
             arguments=[
                 ObjectID(create_chunk_cap.id),
                 [SuiU8(n) for n in create_chunk_cap.hash],
-                SuiU16(ObjectID(create_chunk_cap.index)),
+                SuiU16(create_chunk_cap.index),
             ],
         )
 
-        for bucket in [chunk.data[i : i + 500] for i in range(0, len(chunk.data), 500)]:
+        for bucket in split_list(chunk.data):
+            vec = [[SuiU8(n) for n in subbucket] for subbucket in bucket]
+            # Reverse the chunks because the add_data() function in the smart contract uses pop_back() instead of remove(0).
+            vec.reverse()
             txer.move_call(
                 target=f"{PACKAGE_ID}::chunk::add_data",
-                arguments=[chunk, [SuiU8(n) for n in bucket]],
+                arguments=[
+                    chunk_arg,
+                    vec,
+                ],
             )
 
         txer.move_call(
-            target=f"{PACKAGE_ID}::chunk::add_data",
-            arguments=[chunk],
+            target=f"{PACKAGE_ID}::chunk::verify",
+            arguments=[
+                verify_chunk_cap_arg,
+                chunk_arg,
+            ],
         )
 
         result = handle_result(txer.execute(gas_budget=10_000_000_000))
@@ -120,7 +132,6 @@ class MiraiFs(Sui):
     ):
         txer = SuiTransaction(
             client=self.client,
-            compress_inputs=True,
             merge_gas_budget=True,
         )
 
@@ -165,8 +176,8 @@ class MiraiFs(Sui):
     def get_file(
         self,
         file_id: str,
-    ):
-        file_obj = handle_result(self.client.get_object(ObjectID(file_id)))
+    ) -> FileObj:
+        file_obj_raw = handle_result(self.client.get_object(ObjectID(file_id)))
 
         create_chunk_cap_df_obj = handle_result(
             self.client.execute(
@@ -201,41 +212,42 @@ class MiraiFs(Sui):
             )
         )
 
-        if isinstance(file_obj, ObjectRead):
+        if isinstance(file_obj_raw, ObjectRead):
             chunks = [
                 ChunkMapping(
                     key=chunk["fields"]["key"],
                     value=chunk["fields"]["value"],
                 )
-                for chunk in file_obj.content.fields["chunks"]["fields"]["contents"]
+                for chunk in file_obj_raw.content.fields["chunks"]["fields"]["contents"]
             ]
-            file = File(
-                id=file_obj.object_id,
+            file_obj = FileObj(
+                id=file_obj_raw.object_id,
+                chunk_size=file_obj_raw.content.fields["chunk_size"],
                 chunks=chunks,
-                mime_type=file_obj.content.fields["mime_type"],
+                mime_type=file_obj_raw.content.fields["mime_type"],
             )
 
         if isinstance(create_chunk_cap_df_obj, ObjectRead):
             create_chunk_cap_ids = create_chunk_cap_df_obj.content.fields["value"]
-            create_chunk_cap_objs = handle_result(
+            create_chunk_cap_objs_raw = handle_result(
                 self.client.execute(
                     GetMultipleObjects(
                         object_ids=[ObjectID(id) for id in create_chunk_cap_ids]
                     )
                 )
             )
-            create_chunk_caps: list[CreateChunkCap] = []
-            for obj in create_chunk_cap_objs:
+            create_chunk_cap_objs: list[CreateChunkCapObj] = []
+            for obj in create_chunk_cap_objs_raw:
                 if isinstance(obj, ObjectRead):
-                    create_chunk_cap = CreateChunkCap(
+                    create_chunk_cap = CreateChunkCapObj(
                         id=obj.object_id,
                         file_id=obj.content.fields["file_id"],
                         hash=obj.content.fields["hash"],
                         index=obj.content.fields["index"],
                         owner=obj.owner.address_owner,
                     )
-                    create_chunk_caps.append(create_chunk_cap)
-            create_chunk_caps.sort(key=lambda x: x.index)
-            file.create_chunk_caps = create_chunk_caps
+                    create_chunk_cap_objs.append(create_chunk_cap)
+            create_chunk_cap_objs.sort(key=lambda x: x.index)
+            file_obj.create_chunk_caps = create_chunk_cap_objs
 
-        return file
+        return file_obj

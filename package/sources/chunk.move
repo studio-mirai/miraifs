@@ -1,5 +1,6 @@
 module miraifs::chunk {
 
+    use sui::event;
     use miraifs::utils::{calculate_chunk_identifier_hash, calculate_hash};
 
     public struct Chunk has key, store {
@@ -31,7 +32,10 @@ module miraifs::chunk {
         file_id: ID,
     }
 
-    const MAX_CHUNK_SIZE_BYTES: u64 = 250_000;
+    public struct DebugEvent has copy, drop {
+        provided: vector<u8>,
+        calculated: vector<u8>,
+    }
 
     const EChunkHashMismatch: u64 = 1;
     const EChunkLengthMismatch: u64 = 2;
@@ -73,10 +77,8 @@ module miraifs::chunk {
         mut data: vector<vector<u8>>,
     ) {
         while (!data.is_empty()) {
-            let partition = data.pop_back();
-            chunk.size = chunk.size + (partition.length() as u32);
-            chunk.data.append(partition);
-        }
+            chunk.data.append(data.pop_back());
+        };
     }
 
     public fun delete(
@@ -108,11 +110,19 @@ module miraifs::chunk {
         ctx: &mut TxContext,
     ) {
         let chunk_bytes_hash = calculate_hash(&chunk.data);
-        let chunk_hash = calculate_chunk_identifier_hash(chunk.index, chunk_bytes_hash);
-        assert!(chunk_hash == chunk.hash, EChunkHashMismatch);
-        chunk.is_verified = true;
-       
+        let chunk_identifier_hash = calculate_chunk_identifier_hash(chunk.index, chunk_bytes_hash);
 
+        event::emit(
+            DebugEvent {
+                provided: chunk.hash,
+                calculated: chunk_identifier_hash,
+            }
+        );
+
+        assert!(chunk_identifier_hash == chunk.hash, EChunkHashMismatch);
+        chunk.is_verified = true;
+        chunk.size = chunk.data.length() as u32;
+       
         let register_chunk_cap = RegisterChunkCap {
             id: object::new(ctx),
             chunk_hash: chunk.hash,

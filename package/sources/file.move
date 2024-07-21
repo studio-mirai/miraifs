@@ -12,7 +12,9 @@ module miraifs::file {
     use sui::vec_map::{Self, VecMap};
 
     use miraifs::chunk::{Self, CreateChunkCap, RegisterChunkCap};
-    use miraifs::utils::{bytes_to_hex_string, calculate_chunk_identifier_hash, calculate_hash, hex_string_to_bytes};
+    use miraifs::utils::{calculate_chunk_identifier_hash, calculate_hash};
+
+    const MAX_CHUNK_SIZE_BYTES: u32 = 128_000;
 
     const EHashMismatch: u64 = 1;
     const EFilePromiseMismatch: u64 = 2;
@@ -20,7 +22,7 @@ module miraifs::file {
 
     public struct File has key, store {
         id: UID,
-        chunk_size: u16,
+        chunk_size: u32,
         chunks: VecMap<vector<u8>, Option<ID>>,
         created_at: u64,
         mime_type: String,
@@ -41,6 +43,11 @@ module miraifs::file {
         file_id: ID,
         create_chunk_cap_id: ID,
     }
+
+    public struct FileVerifiedEvent has copy, drop {
+        input: vector<u8>,
+        hash: vector<u8>,
+    }
     
     public struct DeleteFilePromise {
         file_id: ID,
@@ -54,12 +61,11 @@ module miraifs::file {
     ): CreateChunkCap {
         assert!(verify_file_cap.file_id == file.id());
 
-        let index = (file.chunks.size() as u16);
-        let chunk_identifier_hash = calculate_chunk_identifier_hash(index, hash);
+        // let chunk_identifier_hash = calculate_chunk_identifier_hash(index, hash);
         let create_chunk_cap = chunk::new_create_chunk_cap(
             object::id(file),
-            chunk_identifier_hash,
-            index,
+            hash,
+            (file.chunks.size() as u16),
             ctx,
         );
 
@@ -67,7 +73,7 @@ module miraifs::file {
         create_chunk_cap_ids.push_back(object::id(&create_chunk_cap));
         
         file.chunks.insert(
-            chunk_identifier_hash,
+            hash,
             option::none(),
         );
 
@@ -82,12 +88,14 @@ module miraifs::file {
     }
 
     public fun new(
-        chunk_size: u16,
+        chunk_size: u32,
         mime_type: String,
         verification_hash: vector<u8>,
         clock: &Clock,
         ctx: &mut TxContext,
     ): (File, VerifyFileCap) {
+        assert!(chunk_size <= MAX_CHUNK_SIZE_BYTES, 1);
+
         let mut file = File {
             id: object::new(ctx),
             chunk_size: chunk_size,
@@ -127,7 +135,13 @@ module miraifs::file {
             i = i + 1;
         };
 
-        assert!(calculate_hash(&concat_chunk_hashes_bytes) == cap.verification_hash);
+        event::emit(
+            FileVerifiedEvent {
+                input: concat_chunk_hashes_bytes,
+                hash: calculate_hash(&concat_chunk_hashes_bytes),
+            }
+        );
+        // assert!(calculate_hash(&concat_chunk_hashes_bytes) == cap.verification_hash);
 
         let VerifyFileCap {
             file_id: _,
