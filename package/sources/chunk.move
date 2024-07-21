@@ -30,18 +30,17 @@ module miraifs::chunk {
     }
 
     const EChunkHashMismatch: u64 = 1;
+    const EInvalidVerifyChunkCapForChunk: u64 = 2;
 
     public fun new(
         cap: CreateChunkCap,
-        hash: vector<u8>,
-        index: u16,
         ctx: &mut TxContext,
     ): (Chunk, VerifyChunkCap) {
         let chunk = Chunk {
             id: object::new(ctx),
             data: vector::empty(),
-            hash: hash,
-            index: index,
+            hash: cap.hash,
+            index: cap.index,
             size: 0,
         };
 
@@ -70,24 +69,13 @@ module miraifs::chunk {
         };
     }
 
-    public(package) fun delete(
-        chunk: Chunk,
-    ) {
-        let Chunk {
-            id,
-            data: _,
-            hash: _,
-            index: _,
-            size: _,
-        } = chunk;
-        id.delete();
-    }
-
     public fun verify(
         cap: VerifyChunkCap,
         mut chunk: Chunk,
         ctx: &mut TxContext,
     ) {
+        assert!(cap.chunk_id == object::id(&chunk), EInvalidVerifyChunkCapForChunk);
+
         let chunk_bytes_hash = calculate_hash(&chunk.data);
         let chunk_identifier_hash = calculate_chunk_identifier_hash(chunk.index, chunk_bytes_hash);
         assert!(chunk_identifier_hash == chunk.hash, EChunkHashMismatch);
@@ -110,20 +98,17 @@ module miraifs::chunk {
         } = cap;
     }
 
-    public(package) fun new_create_chunk_cap(
-        file_id: ID,
-        hash: vector<u8>,
-        index: u16,
-        ctx: &mut TxContext,
-    ): CreateChunkCap {
-        let cap = CreateChunkCap {
-            id: object::new(ctx),
-            file_id,
-            hash: hash,
-            index: index,
-        };
-
-        cap
+    public(package) fun drop(
+        chunk: Chunk,
+    ) {
+        let Chunk {
+            id,
+            data: _,
+            hash: _,
+            index: _,
+            size: _,
+        } = chunk;
+        id.delete();
     }
 
     public(package) fun id(
@@ -142,6 +127,22 @@ module miraifs::chunk {
         chunk: &Chunk,
     ): u32 {
         chunk.size
+    }
+
+    public(package) fun new_create_chunk_cap(
+        file_id: ID,
+        hash: vector<u8>,
+        index: u16,
+        ctx: &mut TxContext,
+    ): CreateChunkCap {
+        let cap = CreateChunkCap {
+            id: object::new(ctx),
+            file_id,
+            hash: hash,
+            index: index,
+        };
+
+        cap
     }
 
     public(package) fun register_chunk_cap_attrs(

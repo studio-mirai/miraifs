@@ -17,9 +17,11 @@ module miraifs::file {
     const MAX_CHUNK_SIZE_BYTES: u32 = 128_000;
 
     const EChunksNotDeleted: u64 = 1;
-    const EInvalidVerifyFileCapForFile: u64 = 2;
-    const EMaxChunkSizeExceeded: u64 = 3;
-    const EVerificationHashMismatch: u64 = 4;
+    const EInvalidHashLength: u64 = 2;
+    const EInvalidVerifyFileCapForFile: u64 = 3;
+    const EMaxChunkSizeExceeded: u64 = 4;
+    const EVerificationHashMismatch: u64 = 5;
+    
 
     public struct File has key, store {
         id: UID,
@@ -51,6 +53,7 @@ module miraifs::file {
         ctx: &mut TxContext,
     ): CreateChunkCap {
         assert!(verify_file_cap.file_id == object::id(file), EInvalidVerifyFileCapForFile);
+        assert!(hash.length() == 32, EInvalidHashLength);
 
         // let chunk_identifier_hash = calculate_chunk_identifier_hash(index, hash);
         let create_chunk_cap = chunk::new_create_chunk_cap(
@@ -71,6 +74,24 @@ module miraifs::file {
         create_chunk_cap
     }
 
+    public fun destroy_empty(
+        file: File,
+    ) {
+        assert!(file.chunks.is_empty(), EChunksNotDeleted);
+
+        let File {
+            id,
+            chunk_size: _,
+            chunks,
+            created_at: _,
+            mime_type: _,
+            size: _,
+        } = file;
+
+        chunks.destroy_empty();
+        id.delete();
+    }
+
     public fun new(
         chunk_size: u32,
         mime_type: String,
@@ -79,6 +100,7 @@ module miraifs::file {
         ctx: &mut TxContext,
     ): (File, VerifyFileCap) {
         assert!(chunk_size <= MAX_CHUNK_SIZE_BYTES, EMaxChunkSizeExceeded);
+        assert!(verification_hash.length() == 32, EInvalidHashLength);
 
         let mut file = File {
             id: object::new(ctx),
@@ -109,6 +131,26 @@ module miraifs::file {
         (file, verify_file_cap)
     }
 
+    public fun receive_and_register_chunk(
+        file: &mut File,
+        cap_to_receive: Receiving<RegisterChunkCap>,
+    ) {
+        let cap = transfer::public_receive(&mut file.id, cap_to_receive);
+        let (chunk_id, chunk_hash, chunk_size) = chunk::register_chunk_cap_attrs(&cap);
+        file.chunks.get_mut(&chunk_hash).fill(chunk_id);
+        file.size = file.size + chunk_size;
+        chunk::delete_register_chunk_cap(cap);
+    }
+
+    public fun receive_and_delete_chunk(
+        file: &mut File,
+        chunk_to_receive: Receiving<Chunk>,
+    ) {
+        let chunk = transfer::public_receive(&mut file.id, chunk_to_receive);
+        file.chunks.remove(&chunk.hash());
+        chunk.drop();
+    }
+
     public fun verify(
         cap: VerifyFileCap,
         file: &File,
@@ -129,44 +171,6 @@ module miraifs::file {
             file_id: _,
             verification_hash: _,
         } = cap;
-    }
-
-    public fun delete(
-        file: File,
-    ) {
-        assert!(file.chunks.is_empty(), EChunksNotDeleted);
-
-        let File {
-            id,
-            chunk_size: _,
-            chunks,
-            created_at: _,
-            mime_type: _,
-            size: _,
-        } = file;
-
-        chunks.destroy_empty();
-        id.delete();
-    }
-
-    public fun receive_and_register_chunk(
-        file: &mut File,
-        cap_to_receive: Receiving<RegisterChunkCap>,
-    ) {
-        let cap = transfer::public_receive(&mut file.id, cap_to_receive);
-        let (chunk_id, chunk_hash, chunk_size) = chunk::register_chunk_cap_attrs(&cap);
-        file.chunks.get_mut(&chunk_hash).fill(chunk_id);
-        file.size = file.size + chunk_size;
-        chunk::delete_register_chunk_cap(cap);
-    }
-
-    public fun receive_and_delete_chunk(
-        file: &mut File,
-        chunk_to_receive: Receiving<Chunk>,
-    ) {
-        let chunk = transfer::public_receive(&mut file.id, chunk_to_receive);
-        file.chunks.remove(&chunk.hash());
-        chunk.delete();
     }
 
     #[test]
