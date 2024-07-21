@@ -1,11 +1,12 @@
 import magic
+import mimetypes
 import logging
 from hashlib import blake2b
 from pathlib import Path
 import typer
 from pysui import SyncClient, SuiConfig, handle_result
 from rich import print
-from miraifs_sdk import PACKAGE_ID
+from miraifs_sdk import PACKAGE_ID, DOWNLOADS_DIR
 from pysui.sui.sui_txresults.single_tx import ObjectRead
 from pysui.sui.sui_txresults.complex_tx import TxResponse
 from miraifs_sdk.miraifs import MiraiFs, Chunk
@@ -242,3 +243,23 @@ def split_gas(
     )
     print(split_gas_coins)
     return
+
+
+@app.command()
+def download(
+    file_id: str = typer.Argument(),
+    file_name: str = typer.Option(""),
+    file_ext: str = typer.Option(""),
+):
+    mfs = MiraiFs()
+    file = mfs.get_file(file_id)
+    chunks = mfs.get_chunks_for_file(file)
+    file_bytes = b"".join(bytes(chunk.data) for chunk in chunks)
+    if file_name == "":
+        file_name = file.id
+    if file_ext == "":
+        file_ext = mimetypes.guess_extension(file.mime_type)
+        file_ext = file_ext[1:]
+    with open(DOWNLOADS_DIR / f"{file_name}.{file_ext}", "wb") as f:
+        f.write(file_bytes)
+    print(f"File downloaded to {DOWNLOADS_DIR / f'{file_name}.{file_ext}'}")
