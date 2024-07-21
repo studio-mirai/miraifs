@@ -80,7 +80,6 @@ def create_chunks(
             print(f"Uploaded Chunk #{create_chunk_cap.index}: {result.effects.transaction_digest}")  # fmt: skip
             computation_cost = int(result.effects.gas_used.computation_cost)
             storage_cost = int(result.effects.gas_used.storage_cost)
-            print(computation_cost + storage_cost)
             total_cost = total_cost + computation_cost + storage_cost
         else:
             raise Exception(f"Unable to upload Chunk #{create_chunk_cap.index}")
@@ -91,7 +90,7 @@ def create_chunks(
 def estimate_upload_cost_in_mist(
     byte_count: int,
 ) -> int:
-    return byte_count * 21725
+    return byte_count * 21785
 
 
 @app.command()

@@ -1,9 +1,8 @@
 module miraifs::chunk {
 
-    use sui::transfer::{Receiving};
     use miraifs::utils::{calculate_chunk_identifier_hash, calculate_hash};
 
-    public struct Chunk has key {
+    public struct Chunk has key, store {
         id: UID,
         data: vector<u8>,
         hash: vector<u8>,
@@ -16,6 +15,13 @@ module miraifs::chunk {
         file_id: ID,
         index: u16,
         hash: vector<u8>,
+    }
+
+    public struct RegisterChunkCap has key, store {
+        id: UID,
+        chunk_id: ID,
+        hash: vector<u8>,
+        size: u32,
     }
 
     public struct VerifyChunkCap {
@@ -80,6 +86,7 @@ module miraifs::chunk {
     public fun verify(
         cap: VerifyChunkCap,
         mut chunk: Chunk,
+        ctx: &mut TxContext,
     ) {
         let chunk_bytes_hash = calculate_hash(&chunk.data);
         let chunk_identifier_hash = calculate_chunk_identifier_hash(chunk.index, chunk_bytes_hash);
@@ -87,7 +94,15 @@ module miraifs::chunk {
 
         chunk.size = chunk.data.length() as u32;
 
-        transfer::transfer(chunk, cap.file_id.to_address());
+        let register_chunk_cap = RegisterChunkCap {
+            id: object::new(ctx),
+            chunk_id: object::id(&chunk),
+            hash: chunk.hash,
+            size: chunk.size,
+        }; 
+
+        transfer::public_transfer(chunk, cap.file_id.to_address());
+        transfer::public_transfer(register_chunk_cap, cap.file_id.to_address());
 
         let VerifyChunkCap {
             chunk_id: _,
@@ -111,13 +126,6 @@ module miraifs::chunk {
         cap
     }
 
-    public(package) fun receive(
-        file_id_mut: &mut UID,
-        chunk_to_receive: Receiving<Chunk>,
-    ): Chunk {
-        transfer::receive(file_id_mut, chunk_to_receive)
-    }
-
     public(package) fun id(
         chunk: &Chunk,
     ): ID {
@@ -136,16 +144,21 @@ module miraifs::chunk {
         chunk.size
     }
 
-    public(package) fun transfer(
-        chunk: Chunk,
-        recipeint: address,
-    ) {
-        transfer::transfer(chunk, recipeint);
+    public(package) fun register_chunk_cap_attrs(
+        cap: &RegisterChunkCap,
+    ): (ID, vector<u8>, u32) {
+        (cap.chunk_id, cap.hash, cap.size)
     }
 
-    public(package) fun create_chunk_cap_id(
-        cap: &CreateChunkCap,
-    ): ID {
-        object::id(cap)
+    public(package) fun delete_register_chunk_cap(
+        cap: RegisterChunkCap,
+    ) {
+        let RegisterChunkCap {
+            id,
+            chunk_id: _,
+            hash: _,
+            size: _,
+        } = cap;
+        id.delete();
     }
 }

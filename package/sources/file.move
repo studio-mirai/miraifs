@@ -11,7 +11,7 @@ module miraifs::file {
     use sui::transfer::{Receiving};
     use sui::vec_map::{Self, VecMap};
 
-    use miraifs::chunk::{Self, Chunk, CreateChunkCap};
+    use miraifs::chunk::{Self, Chunk, CreateChunkCap, RegisterChunkCap};
     use miraifs::utils::{calculate_hash};
 
     const MAX_CHUNK_SIZE_BYTES: u32 = 128_000;
@@ -37,17 +37,11 @@ module miraifs::file {
     }
 
     public struct FileCreatedEvent has copy, drop {
+        chunk_size: u32,
+        created_at: u64,
         file_id: ID,
-    }
-
-    public struct FileChunkAddedEvent has copy, drop {
-        file_id: ID,
-        create_chunk_cap_id: ID,
-    }
-
-    public struct FileVerifiedEvent has copy, drop {
-        input: vector<u8>,
-        hash: vector<u8>,
+        mime_type: String,
+        verification_hash: vector<u8>,
     }
 
     public fun add_chunk_hash(
@@ -74,13 +68,6 @@ module miraifs::file {
             option::none(),
         );
 
-        event::emit(
-            FileChunkAddedEvent {
-                file_id: object::id(file),
-                create_chunk_cap_id: create_chunk_cap.create_chunk_cap_id(),
-            }
-        );
-
         create_chunk_cap
     }
 
@@ -105,13 +92,17 @@ module miraifs::file {
         df::add(&mut file.id, b"create_chunk_cap_ids", vector<ID>[]);
 
         let verify_file_cap = VerifyFileCap {
-            file_id: object::id(&file),
+            file_id: file.id.to_inner(),
             verification_hash: verification_hash,
         };
 
         event::emit(
             FileCreatedEvent {
-                file_id: object::id(&file),
+                chunk_size: chunk_size,
+                created_at: file.created_at,
+                file_id: file.id.to_inner(),
+                mime_type: file.mime_type,
+                verification_hash: verify_file_cap.verification_hash,
             }
         );
 
@@ -131,13 +122,6 @@ module miraifs::file {
             concat_chunk_hashes_bytes.append(*chunk_hash);
             i = i + 1;
         };
-
-        event::emit(
-            FileVerifiedEvent {
-                input: concat_chunk_hashes_bytes,
-                hash: calculate_hash(&concat_chunk_hashes_bytes),
-            }
-        );
         
         assert!(calculate_hash(&concat_chunk_hashes_bytes) == cap.verification_hash, EVerificationHashMismatch);
 
@@ -167,19 +151,20 @@ module miraifs::file {
 
     public fun receive_and_register_chunk(
         file: &mut File,
-        chunk_to_receive: Receiving<Chunk>,
+        cap_to_receive: Receiving<RegisterChunkCap>,
     ) {
-        let chunk = chunk::receive(&mut file.id, chunk_to_receive);
-        file.chunks.get_mut(&chunk.hash()).fill(chunk.id());
-        file.size = file.size + chunk.size();
-        chunk.transfer(file.id.to_address())
+        let cap = transfer::public_receive(&mut file.id, cap_to_receive);
+        let (chunk_id, chunk_hash, chunk_size) = chunk::register_chunk_cap_attrs(&cap);
+        file.chunks.get_mut(&chunk_hash).fill(chunk_id);
+        file.size = file.size + chunk_size;
+        chunk::delete_register_chunk_cap(cap);
     }
 
     public fun receive_and_delete_chunk(
         file: &mut File,
         chunk_to_receive: Receiving<Chunk>,
     ) {
-        let chunk = chunk::receive(&mut file.id, chunk_to_receive);
+        let chunk = transfer::public_receive(&mut file.id, chunk_to_receive);
         file.chunks.remove(&chunk.hash());
         chunk.delete();
     }
