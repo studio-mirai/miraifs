@@ -112,12 +112,14 @@ def create(
 ):
     chunks = load_chunks(path, chunk_size)
     verification_hash = calculate_file_verification_hash(chunks)
+    extension = str(path.suffix.replace(".", ""))
     mime = magic.Magic(mime=True)
     mime_type = str(mime.from_file(path))
 
     print(f"Chunk Count: {len(chunks)}")
     print(f"File Size: {sum([len(chunk.data) for chunk in chunks])} bytes")
     print(f"MIME Type: {mime_type}")
+    print(f"File Extension: {extension}")
     print(f"Verification Hash: {list(verification_hash.digest())}")
     print(f"Estimated Cost: {estimate_upload_cost_in_mist(sum([len(chunk.data) for chunk in chunks])) / 10**9} SUI")  # fmt: skip
     typer.confirm("Do you want to upload this file?", abort=True)
@@ -130,6 +132,7 @@ def create(
         target=f"{PACKAGE_ID}::file::new",
         arguments=[
             SuiU32(chunk_size),
+            SuiString(extension),
             SuiString(mime_type),
             [SuiU8(e) for e in list(verification_hash.digest())],
             ObjectID("0x6"),
@@ -232,18 +235,14 @@ def split_gas(
 @app.command()
 def download(
     file_id: str = typer.Argument(),
-    file_name: str = typer.Option(""),
-    file_ext: str = typer.Option(""),
+    file_name: str = typer.Option(None),
 ):
     mfs = MiraiFs()
     file = mfs.get_file(file_id)
     chunks = mfs.get_chunks_for_file(file)
     file_bytes = b"".join(bytes(chunk.data) for chunk in chunks)
-    if file_name == "":
+    if not file_name:
         file_name = file.id
-    if file_ext == "":
-        file_ext = mimetypes.guess_extension(file.mime_type)
-        file_ext = file_ext[1:]
-    with open(DOWNLOADS_DIR / f"{file_name}.{file_ext}", "wb") as f:
+    with open(DOWNLOADS_DIR / f"{file_name}.{file.extension}", "wb") as f:
         f.write(file_bytes)
-    print(f"File downloaded to {DOWNLOADS_DIR / f'{file_name}.{file_ext}'}")
+    print(f"File downloaded to {DOWNLOADS_DIR / f'{file_name}.{file.extension}'}")

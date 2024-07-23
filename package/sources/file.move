@@ -22,12 +22,12 @@ module miraifs::file {
     const EMaxChunkSizeExceeded: u64 = 4;
     const EVerificationHashMismatch: u64 = 5;
     
-
     public struct File has key, store {
         id: UID,
         chunk_size: u32,
         chunks: VecMap<vector<u8>, Option<ID>>,
         created_at: u64,
+        extension: String,
         mime_type: String,
         size: u32,
     }
@@ -84,6 +84,7 @@ module miraifs::file {
             chunk_size: _,
             chunks,
             created_at: _,
+            extension: _,
             mime_type: _,
             size: _,
         } = file;
@@ -94,6 +95,7 @@ module miraifs::file {
 
     public fun new(
         chunk_size: u32,
+        extension: String,
         mime_type: String,
         verification_hash: vector<u8>,
         clock: &Clock,
@@ -107,6 +109,7 @@ module miraifs::file {
             chunk_size: chunk_size,
             chunks: vec_map::empty(),
             created_at: clock.timestamp_ms(),
+            extension: extension,
             mime_type: mime_type,
             size: 0,
         };
@@ -171,15 +174,5 @@ module miraifs::file {
             file_id: _,
             verification_hash: _,
         } = cap;
-    }
-
-    #[test]
-    fun test_vector_equality() {
-        let v1: vector<u8> = vector[37,88,16,238,173,243,169,238,19,107,217,168,75,117,36,247,43,123,8,46,226,144,63,119,132,138,104,19,31,252,184];
-        let v2: vector<u8> = vector[37,88,16,238,173,243,169,238,19,107,217,168,75,117,36,247,43,123,8,46,226,144,63,119,132,138,104,19,31,252,184];
-        assert!(v1 == v2, 1);
-        let v3: vector<u8> = vector[37,88,16,238,173,243,169,238,19,107,217,168,75,117,36,247,43,123,8,46,226,144,63,119,132,138,104,19,31,252,184];
-        let v4: vector<u8> = vector[184,252,31,19,104,138,132,119,63,144,226,46,8,123,43,247,36,117,75,168,217,107,19,238,169,243,173,238,16,88,37];
-        assert!(v3 != v4, 1);
     }
 }

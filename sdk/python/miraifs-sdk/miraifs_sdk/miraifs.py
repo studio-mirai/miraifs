@@ -32,6 +32,7 @@ class FileObj(BaseModel):
     chunk_size: int
     chunks: list["ChunkMapping"]
     create_chunk_caps: list["CreateChunkCapObj"] = []
+    extension: str
     mime_type: str
     size: int
 
@@ -259,6 +260,7 @@ class MiraiFs(Sui):
                 id=file_obj_raw.object_id,
                 chunk_size=file_obj_raw.content.fields["chunk_size"],
                 chunks=chunks,
+                extension=file_obj_raw.content.fields["extension"],
                 mime_type=file_obj_raw.content.fields["mime_type"],
                 size=file_obj_raw.content.fields["size"],
             )
