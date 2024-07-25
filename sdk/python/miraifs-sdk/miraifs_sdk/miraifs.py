@@ -1,4 +1,4 @@
-from miraifs_sdk import PACKAGE_ID
+from miraifs_sdk import MIRAIFS_PACKAGE_ID
 from miraifs_sdk.sui import Sui
 from miraifs_sdk.utils import split_lists_into_sublists
 from pysui import handle_result
@@ -55,7 +55,7 @@ class MiraiFs(Sui):
         )
         for cap in register_chunk_caps:
             txer.move_call(
-                target=f"{PACKAGE_ID}::file::receive_and_register_chunk",
+                target=f"{MIRAIFS_PACKAGE_ID}::file::receive_and_register_chunk",
                 arguments=[
                     ObjectID(file.id),
                     ObjectID(cap.id),
@@ -76,7 +76,7 @@ class MiraiFs(Sui):
             merge_gas_budget=True,
         )
         chunk_arg, verify_chunk_cap_arg = txer.move_call(
-            target=f"{PACKAGE_ID}::chunk::new",
+            target=f"{MIRAIFS_PACKAGE_ID}::chunk::new",
             arguments=[ObjectID(create_chunk_cap.id)],
         )
         for bucket in split_list(chunk.data):
@@ -84,14 +84,14 @@ class MiraiFs(Sui):
             # Reverse the chunks because the add_data() function in the smart contract uses pop_back() instead of remove(0).
             vec.reverse()
             txer.move_call(
-                target=f"{PACKAGE_ID}::chunk::add_data",
+                target=f"{MIRAIFS_PACKAGE_ID}::chunk::add_data",
                 arguments=[
                     chunk_arg,
                     vec,
                 ],
             )
         txer.move_call(
-            target=f"{PACKAGE_ID}::chunk::verify",
+            target=f"{MIRAIFS_PACKAGE_ID}::chunk::verify",
             arguments=[
                 verify_chunk_cap_arg,
                 chunk_arg,
@@ -121,14 +121,14 @@ class MiraiFs(Sui):
             item_type="u64",
         )
         file = txer.move_call(
-            target=f"{PACKAGE_ID}::file::new",
+            target=f"{MIRAIFS_PACKAGE_ID}::file::new",
             arguments=[
                 SuiString(mime_type),
                 SuiU64(len(chunk_hashes)),
             ],
         )
         txer.move_call(
-            target=f"{PACKAGE_ID}::file::add_chunk_hashes",
+            target=f"{MIRAIFS_PACKAGE_ID}::file::add_chunk_hashes",
             arguments=[
                 file,
                 chunk_hashes_vector,
@@ -154,14 +154,14 @@ class MiraiFs(Sui):
         )
         for chunk in file.chunks:
             txer.move_call(
-                target=f"{PACKAGE_ID}::file::receive_and_delete_chunk",
+                target=f"{MIRAIFS_PACKAGE_ID}::file::receive_and_delete_chunk",
                 arguments=[
                     ObjectID(file.id),
                     ObjectID(chunk.value),
                 ],
             )
         txer.move_call(
-            target=f"{PACKAGE_ID}::file::delete",
+            target=f"{MIRAIFS_PACKAGE_ID}::file::delete",
             arguments=[
                 ObjectID(file.id),
             ],
@@ -288,7 +288,7 @@ class MiraiFs(Sui):
     ) -> list[RegisterChunkCap]:
         query = {
             "filter": {
-                "StructType": f"{PACKAGE_ID}::chunk::RegisterChunkCap",
+                "StructType": f"{MIRAIFS_PACKAGE_ID}::chunk::RegisterChunkCap",
             },
             "options": {
                 "showType": False,
@@ -328,7 +328,7 @@ class MiraiFs(Sui):
     ):
         query = {
             "filter": {
-                "StructType": f"{PACKAGE_ID}::chunk::Chunk",
+                "StructType": f"{MIRAIFS_PACKAGE_ID}::chunk::Chunk",
             },
             "options": {
                 "showType": False,

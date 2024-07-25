@@ -5,7 +5,7 @@ from pathlib import Path
 
 import magic
 import typer
-from miraifs_sdk import DOWNLOADS_DIR, MAX_CHUNK_SIZE_BYTES, PACKAGE_ID
+from miraifs_sdk import DOWNLOADS_DIR, MAX_CHUNK_SIZE_BYTES, MIRAIFS_PACKAGE_ID
 from miraifs_sdk.miraifs import Chunk, MiraiFs
 from miraifs_sdk.models import ChunkRaw
 from miraifs_sdk.utils import (
@@ -129,7 +129,7 @@ def create(
         merge_gas_budget=True,
     )
     file, verify_file_cap = txer.move_call(
-        target=f"{PACKAGE_ID}::file::new",
+        target=f"{MIRAIFS_PACKAGE_ID}::file::new",
         arguments=[
             SuiU32(chunk_size),
             SuiString(extension),
@@ -141,7 +141,7 @@ def create(
     create_chunk_caps = []
     for chunk in chunks:
         create_chunk_cap = txer.move_call(
-            target=f"{PACKAGE_ID}::file::add_chunk_hash",
+            target=f"{MIRAIFS_PACKAGE_ID}::file::add_chunk_hash",
             arguments=[
                 verify_file_cap,
                 file,
@@ -154,7 +154,7 @@ def create(
         recipient=config.active_address,
     )
     txer.move_call(
-        target=f"{PACKAGE_ID}::file::verify",
+        target=f"{MIRAIFS_PACKAGE_ID}::file::verify",
         arguments=[
             verify_file_cap,
             file,
@@ -172,7 +172,7 @@ def create(
         print(f"Storage Cost: {int(result.effects.gas_used.storage_cost) / 10**9} SUI")  # fmt: skip
         print(f"Storage Rebate: {int(result.effects.gas_used.storage_rebate) / 10**9} SUI")  # fmt: skip
         for event in result.events:
-            if event.event_type == f"{PACKAGE_ID}::file::FileCreatedEvent":
+            if event.event_type == f"{MIRAIFS_PACKAGE_ID}::file::FileCreatedEvent":
                 file_id = json.loads(event.parsed_json.replace("'", '"'))["file_id"]
                 print("\nRun the command below to upload file chunks to MiraiFS.")
                 print(f"mfs file create-chunks {file_id} {path}")
