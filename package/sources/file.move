@@ -35,6 +35,7 @@ module miraifs::file {
         count: u32,
         hash: vector<u8>,
         partitions: VecMap<vector<u8>, Option<ID>>,
+        size: u32
     }
 
     public struct VerifyFileCap {
@@ -92,20 +93,12 @@ module miraifs::file {
         let File {
             id,
             chunks,
-            created_at: _,
-            extension: _,
-            mime_type: _,
-            size: _,
+            ..
         } = file;
 
         id.delete();
         
-        let FileChunks {
-            count: _,
-            hash: _,
-            partitions,
-        } = chunks;
-
+        let FileChunks {partitions, ..} = chunks;
         partitions.destroy_empty();
     }
 
@@ -124,6 +117,7 @@ module miraifs::file {
             count: 0,
             hash: chunks_hash,
             partitions: vec_map::empty(),
+            size: chunk_size,
         };
 
         let mut file = File {
@@ -188,7 +182,7 @@ module miraifs::file {
 
     public fun verify(
         cap: VerifyFileCap,
-        file: &File,
+        file: &mut File,
     ) {
         assert!(cap.file_id == object::id(file), EInvalidVerifyFileCapForFile);
 
@@ -202,9 +196,9 @@ module miraifs::file {
         
         assert!(calculate_hash(&concat_chunk_hashes_bytes) == file.chunks.hash, EVerificationHashMismatch);
 
-        let VerifyFileCap {
-            file_id: _,
-        } = cap;
+        file.chunks.count = file.chunks.partitions.size() as u32;
+
+        let VerifyFileCap {..} = cap;
     }
 
     public fun id(

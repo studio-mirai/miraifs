@@ -1,16 +1,27 @@
 from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime
+
+
+class FileChunkPartition(BaseModel):
+    key: list[int]
+    value: Optional[str]
 
 
 class FileChunks(BaseModel):
     count: int
     hash: list[int]
-    partitions: dict[list[int], Optional[str]]
+    partitions: list[FileChunkPartition]
+    size: int
 
 
 class File(BaseModel):
     id: str
     chunks: FileChunks
+    created_at: datetime
+    extension: str
+    mime_type: str
+    size: int
 
 
 class Chunk(BaseModel):
@@ -19,6 +30,12 @@ class Chunk(BaseModel):
     hash: list[int]
     index: int
     size: int
+
+
+class ChunkRaw(BaseModel):
+    data: list[int]
+    hash: list[int]
+    index: int
 
 
 class CreateChunkCap(BaseModel):

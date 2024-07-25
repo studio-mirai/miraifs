@@ -142,3 +142,9 @@ def to_sui(
     value: float,
 ) -> float:
     return value / 10**9
+
+
+def estimate_upload_cost_in_mist(
+    byte_count: int,
+) -> int:
+    return byte_count * 21785

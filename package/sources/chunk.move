@@ -73,12 +73,7 @@ module miraifs::chunk {
             file_id: cap.file_id,
         };
 
-        let CreateChunkCap {
-            id,
-            file_id: _,
-            hash: _,
-            index: _,
-        } = cap;
+        let CreateChunkCap {id, ..} = cap;
         id.delete();
 
         (chunk, verify_chunk_cap)
@@ -125,10 +120,7 @@ module miraifs::chunk {
         transfer::public_transfer(chunk, cap.file_id.to_address());
         transfer::public_transfer(register_chunk_cap, cap.file_id.to_address());
 
-        let VerifyChunkCap {
-            chunk_id: _,
-            file_id: _,
-        } = cap;
+        let VerifyChunkCap {..} = cap;
     }
 
     // === Public-View Functions ===

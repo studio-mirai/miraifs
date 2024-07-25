@@ -1,6 +1,5 @@
 import json
 import logging
-import mimetypes
 from hashlib import blake2b
 from pathlib import Path
 
@@ -8,7 +7,13 @@ import magic
 import typer
 from miraifs_sdk import DOWNLOADS_DIR, MAX_CHUNK_SIZE_BYTES, PACKAGE_ID
 from miraifs_sdk.miraifs import Chunk, MiraiFs
-from miraifs_sdk.utils import calculate_hash, chunk_data, int_to_bytes
+from miraifs_sdk.models import ChunkRaw
+from miraifs_sdk.utils import (
+    calculate_hash,
+    chunk_data,
+    int_to_bytes,
+    estimate_upload_cost_in_mist,
+)
 from pysui import SuiConfig, SyncClient, handle_result
 from pysui.sui.sui_txn.sync_transaction import SuiTransaction
 from pysui.sui.sui_txresults.complex_tx import TxResponse
@@ -33,15 +38,15 @@ def calculate_unique_chunk_hash(
 def load_chunks(
     path: Path,
     chunk_size: int,
-) -> list[Chunk]:
+) -> list[ChunkRaw]:
     with open(path, "rb") as f:
         data = f.read()
     chunked_data = chunk_data(data, chunk_size)
-    chunks: list[Chunk] = []
+    chunks: list[ChunkRaw] = []
     for i, data_chunk in enumerate(chunked_data):
         chunk_data_hash = calculate_hash(data_chunk).digest()
         chunk_identifier_hash = calculate_unique_chunk_hash(chunk_data_hash, i).digest()
-        chunk = Chunk(
+        chunk = ChunkRaw(
             data=list(data_chunk),
             hash=list(chunk_identifier_hash),
             index=i,
@@ -65,13 +70,14 @@ def create_chunks(
     mfs = MiraiFs()
     file = mfs.get_file(file_id)
 
-    chunks = load_chunks(path, file.chunk_size)
+    chunks = load_chunks(path, file.chunks.size)
     chunks_by_hash = {bytes(chunk.hash): chunk for chunk in chunks}
 
     print(f"Loaded {len(chunks)} chunks for File {file_id}")
 
     total_cost = 0
-    for create_chunk_cap in file.create_chunk_caps:
+    create_chunk_caps = mfs.get_create_chunk_caps(file.id)
+    for create_chunk_cap in create_chunk_caps:
         result = mfs.create_chunk(
             create_chunk_cap,
             chunks_by_hash[bytes(create_chunk_cap.hash)],
@@ -87,20 +93,14 @@ def create_chunks(
     print(f"Total Cost: {total_cost} MIST ({total_cost / 10**9} SUI)")
 
 
-def estimate_upload_cost_in_mist(
-    byte_count: int,
-) -> int:
-    return byte_count * 21785
-
-
 @app.command()
 def register_chunks(
     file_id: str = typer.Argument(),
 ):
     mfs = MiraiFs()
     file_obj = mfs.get_file(file_id)
-    chunk_objs = mfs.get_chunk_objs(file_obj)
-    result = mfs.register_chunks(file_obj, chunk_objs)
+    register_chunk_caps = mfs.get_register_chunk_caps(file_obj)
+    result = mfs.register_chunks(file_obj, register_chunk_caps)
     print(result)
     return
 
@@ -167,7 +167,6 @@ def create(
     result = handle_result(
         txer.execute(gas_budget=5_000_000_000),
     )
-
     if isinstance(result, TxResponse):
         print(f"Computation Cost: {int(result.effects.gas_used.computation_cost) / 10**9} SUI")  # fmt: skip
         print(f"Storage Cost: {int(result.effects.gas_used.storage_cost) / 10**9} SUI")  # fmt: skip
@@ -197,7 +196,7 @@ def view(
     convert_hashes: bool = typer.Option(True),
 ):
     mfs = MiraiFs()
-    file_obj = mfs.get_file(file_id, convert_hashes)
+    file_obj = mfs.get_file(file_id)
     print(file_obj)
     return
 
