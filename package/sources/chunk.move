@@ -98,6 +98,58 @@ module miraifs::chunk {
         } = cap;
     }
 
+    // === Public-View Functions ===
+
+    public fun id(
+        chunk: &Chunk,
+    ): ID {
+        chunk.id.to_inner()
+    }
+
+    public fun data(
+        chunk: &Chunk,
+    ): vector<u8> {
+        chunk.data
+    }
+
+    public fun hash(
+        chunk: &Chunk,
+    ): vector<u8> {
+        chunk.hash
+    }
+
+    public fun index(
+        chunk: &Chunk,
+    ): u16 {
+        chunk.index
+    }
+
+    public fun size(
+        chunk: &Chunk,
+    ): u32 {
+        chunk.size
+    }
+
+    public fun register_chunk_cap_id(
+        cap: &RegisterChunkCap,
+    ): ID {
+        cap.chunk_id
+    }
+
+    public fun register_chunk_cap_hash(
+        cap: &RegisterChunkCap,
+    ): vector<u8> {
+        cap.hash
+    }
+
+    public fun register_chunk_cap_size(
+        cap: &RegisterChunkCap,
+    ): u32 {
+        cap.size
+    }
+
+    // === Public-Package Functions ===
+
     public(package) fun drop(
         chunk: Chunk,
     ) {
@@ -109,24 +161,6 @@ module miraifs::chunk {
             size: _,
         } = chunk;
         id.delete();
-    }
-
-    public(package) fun id(
-        chunk: &Chunk,
-    ): ID {
-        object::id(chunk)
-    }
-
-    public(package) fun hash(
-        chunk: &Chunk,
-    ): vector<u8> {
-        chunk.hash
-    }
-
-    public(package) fun size(
-        chunk: &Chunk,
-    ): u32 {
-        chunk.size
     }
 
     public(package) fun new_create_chunk_cap(
@@ -145,13 +179,20 @@ module miraifs::chunk {
         cap
     }
 
-    public(package) fun register_chunk_cap_attrs(
-        cap: &RegisterChunkCap,
-    ): (ID, vector<u8>, u32) {
-        (cap.chunk_id, cap.hash, cap.size)
+    public(package) fun drop_create_chunk_cap(
+        cap: CreateChunkCap,
+    ) {
+        let CreateChunkCap {
+            id,
+            file_id: _,
+            hash: _,
+            index: _,
+        } = cap;
+
+        id.delete();
     }
 
-    public(package) fun delete_register_chunk_cap(
+    public(package) fun drop_register_chunk_cap(
         cap: RegisterChunkCap,
     ) {
         let RegisterChunkCap {
@@ -160,6 +201,7 @@ module miraifs::chunk {
             hash: _,
             size: _,
         } = cap;
+        
         id.delete();
     }
 }

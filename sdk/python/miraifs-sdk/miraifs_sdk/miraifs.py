@@ -153,17 +153,14 @@ class MiraiFs(Sui):
             client=self.client,
             merge_gas_budget=True,
         )
-
         chunk_hashes_vector = txer.make_move_vector(
             items=[SuiU256(hash) for hash in chunk_hashes],
             item_type="u256",
         )
-
         chunk_lengths_vector = txer.make_move_vector(
             items=[SuiU64(length) for length in chunk_lengths],
             item_type="u64",
         )
-
         file = txer.move_call(
             target=f"{PACKAGE_ID}::file::new",
             arguments=[
@@ -171,7 +168,6 @@ class MiraiFs(Sui):
                 SuiU64(len(chunk_hashes)),
             ],
         )
-
         txer.move_call(
             target=f"{PACKAGE_ID}::file::add_chunk_hashes",
             arguments=[
@@ -180,16 +176,13 @@ class MiraiFs(Sui):
                 chunk_lengths_vector,
             ],
         )
-
         txer.transfer_objects(
             transfers=[file],
             recipient=self.config.active_address,
         )
-
         result = handle_result(
             txer.execute(),
         )
-
         return result
 
     def delete_file(

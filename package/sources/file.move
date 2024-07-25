@@ -24,18 +24,21 @@ module miraifs::file {
     
     public struct File has key, store {
         id: UID,
-        chunk_size: u32,
-        chunks: VecMap<vector<u8>, Option<ID>>,
+        chunks: FileChunks,
         created_at: u64,
         extension: String,
         mime_type: String,
         size: u32,
     }
 
+    public struct FileChunks has store {
+        count: u32,
+        digest: vector<u8>,
+        partitions: VecMap<vector<u8>, Option<ID>>,
+    }
+
     public struct VerifyFileCap {
         file_id: ID,
-        // Hash of all individual chunk identifier hashes combined into a single vector<u8>.
-        verification_hash: vector<u8>,
     }
 
     public struct FileCreatedEvent has copy, drop {
@@ -43,7 +46,7 @@ module miraifs::file {
         created_at: u64,
         file_id: ID,
         mime_type: String,
-        verification_hash: vector<u8>,
+        chunks_digest: vector<u8>,
     }
 
     public fun add_chunk_hash(
@@ -59,14 +62,14 @@ module miraifs::file {
         let create_chunk_cap = chunk::new_create_chunk_cap(
             object::id(file),
             hash,
-            (file.chunks.size() as u16),
+            (file.chunks.partitions.size() as u16),
             ctx,
         );
 
         let create_chunk_cap_ids: &mut vector<ID> = df::borrow_mut(&mut file.id, b"create_chunk_cap_ids");
         create_chunk_cap_ids.push_back(object::id(&create_chunk_cap));
         
-        file.chunks.insert(
+        file.chunks.partitions.insert(
             hash,
             option::none(),
         );
@@ -77,11 +80,10 @@ module miraifs::file {
     public fun destroy_empty(
         file: File,
     ) {
-        assert!(file.chunks.is_empty(), EChunksNotDeleted);
+        assert!(file.chunks.partitions.is_empty(), EChunksNotDeleted);
 
         let File {
             id,
-            chunk_size: _,
             chunks,
             created_at: _,
             extension: _,
@@ -89,25 +91,37 @@ module miraifs::file {
             size: _,
         } = file;
 
-        chunks.destroy_empty();
         id.delete();
+        
+        let FileChunks {
+            count: _,
+            digest: _,
+            partitions,
+        } = chunks;
+
+        partitions.destroy_empty();
     }
 
     public fun new(
         chunk_size: u32,
         extension: String,
         mime_type: String,
-        verification_hash: vector<u8>,
+        chunks_digest: vector<u8>,
         clock: &Clock,
         ctx: &mut TxContext,
     ): (File, VerifyFileCap) {
         assert!(chunk_size <= MAX_CHUNK_SIZE_BYTES, EMaxChunkSizeExceeded);
-        assert!(verification_hash.length() == 32, EInvalidHashLength);
+        assert!(chunks_digest.length() == 32, EInvalidHashLength);
+
+        let file_chunks = FileChunks {
+            count: 0,
+            digest: chunks_digest,
+            partitions: vec_map::empty(),
+        };
 
         let mut file = File {
             id: object::new(ctx),
-            chunk_size: chunk_size,
-            chunks: vec_map::empty(),
+            chunks: file_chunks,
             created_at: clock.timestamp_ms(),
             extension: extension,
             mime_type: mime_type,
@@ -118,7 +132,6 @@ module miraifs::file {
 
         let verify_file_cap = VerifyFileCap {
             file_id: file.id.to_inner(),
-            verification_hash: verification_hash,
         };
 
         event::emit(
@@ -127,7 +140,7 @@ module miraifs::file {
                 created_at: file.created_at,
                 file_id: file.id.to_inner(),
                 mime_type: file.mime_type,
-                verification_hash: verify_file_cap.verification_hash,
+                chunks_digest: file.chunks.digest,
             }
         );
 
@@ -139,10 +152,13 @@ module miraifs::file {
         cap_to_receive: Receiving<RegisterChunkCap>,
     ) {
         let cap = transfer::public_receive(&mut file.id, cap_to_receive);
-        let (chunk_id, chunk_hash, chunk_size) = chunk::register_chunk_cap_attrs(&cap);
-        file.chunks.get_mut(&chunk_hash).fill(chunk_id);
+        let chunk_id = cap.register_chunk_cap_id();
+        let chunk_hash = cap.register_chunk_cap_hash();
+        let chunk_size = cap.register_chunk_cap_size();
+        
+        file.chunks.partitions.get_mut(&chunk_hash).fill(chunk_id);
         file.size = file.size + chunk_size;
-        chunk::delete_register_chunk_cap(cap);
+        cap.drop_register_chunk_cap();
     }
 
     public fun receive_and_delete_chunk(
@@ -150,7 +166,7 @@ module miraifs::file {
         chunk_to_receive: Receiving<Chunk>,
     ) {
         let chunk = transfer::public_receive(&mut file.id, chunk_to_receive);
-        file.chunks.remove(&chunk.hash());
+        file.chunks.partitions.remove(&chunk.hash());
         chunk.drop();
     }
 
@@ -162,17 +178,64 @@ module miraifs::file {
 
         let mut concat_chunk_hashes_bytes: vector<u8> = vector[];
         let mut i = 0;
-        while (i < file.chunks.size()) {
-            let (chunk_hash, _) = file.chunks.get_entry_by_idx(i);
+        while (i < file.chunks.partitions.size()) {
+            let (chunk_hash, _) = file.chunks.partitions.get_entry_by_idx(i);
             concat_chunk_hashes_bytes.append(*chunk_hash);
             i = i + 1;
         };
         
-        assert!(calculate_hash(&concat_chunk_hashes_bytes) == cap.verification_hash, EVerificationHashMismatch);
+        assert!(calculate_hash(&concat_chunk_hashes_bytes) == file.chunks.digest, EVerificationHashMismatch);
 
         let VerifyFileCap {
             file_id: _,
-            verification_hash: _,
         } = cap;
+    }
+
+    public fun id(
+        file: &File,
+    ): ID {
+        file.id.to_inner()
+    }
+
+    public fun chunks_count(
+        file: &File,
+    ): u32 {
+        file.chunks.count
+    }
+
+    public fun chunks_digest(
+        file: &File,
+    ): vector<u8> {
+        file.chunks.digest
+    }
+
+    public fun chunks_partitions(
+        file: &File,
+    ): VecMap<vector<u8>, Option<ID>> {
+        file.chunks.partitions
+    }
+
+    public fun created_at(
+        file: &File,
+    ): u64 {
+        file.created_at
+    }
+
+    public fun extension(
+        file: &File,
+    ): String {
+        file.extension
+    }
+
+    public fun mime_type(
+        file: &File,
+    ): String {
+        file.mime_type
+    }
+
+    public fun size(
+        file: &File,
+    ): u32 {
+        file.size
     }
 }
