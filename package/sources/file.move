@@ -7,7 +7,7 @@ module miraifs::file {
 
     use sui::clock::{Clock};
     use sui::dynamic_field::{Self as df};
-    use sui::event;
+    use sui::event::{emit};
     use sui::transfer::{Receiving};
     use sui::vec_map::{Self, VecMap};
 
@@ -33,7 +33,7 @@ module miraifs::file {
 
     public struct FileChunks has store {
         count: u32,
-        digest: vector<u8>,
+        hash: vector<u8>,
         partitions: VecMap<vector<u8>, Option<ID>>,
     }
 
@@ -46,7 +46,14 @@ module miraifs::file {
         created_at: u64,
         file_id: ID,
         mime_type: String,
-        chunks_digest: vector<u8>,
+        chunks_hash: vector<u8>,
+    }
+
+    public struct ChunkRegisteredEvent has copy, drop {
+        chunk_hash: vector<u8>,
+        chunk_id: ID,
+        chunk_index: u16,
+        file_id: ID,
     }
 
     public fun add_chunk_hash(
@@ -95,7 +102,7 @@ module miraifs::file {
         
         let FileChunks {
             count: _,
-            digest: _,
+            hash: _,
             partitions,
         } = chunks;
 
@@ -106,16 +113,16 @@ module miraifs::file {
         chunk_size: u32,
         extension: String,
         mime_type: String,
-        chunks_digest: vector<u8>,
+        chunks_hash: vector<u8>,
         clock: &Clock,
         ctx: &mut TxContext,
     ): (File, VerifyFileCap) {
         assert!(chunk_size <= MAX_CHUNK_SIZE_BYTES, EMaxChunkSizeExceeded);
-        assert!(chunks_digest.length() == 32, EInvalidHashLength);
+        assert!(chunks_hash.length() == 32, EInvalidHashLength);
 
         let file_chunks = FileChunks {
             count: 0,
-            digest: chunks_digest,
+            hash: chunks_hash,
             partitions: vec_map::empty(),
         };
 
@@ -134,13 +141,13 @@ module miraifs::file {
             file_id: file.id.to_inner(),
         };
 
-        event::emit(
+        emit(
             FileCreatedEvent {
                 chunk_size: chunk_size,
                 created_at: file.created_at,
                 file_id: file.id.to_inner(),
                 mime_type: file.mime_type,
-                chunks_digest: file.chunks.digest,
+                chunks_hash: file.chunks.hash,
             }
         );
 
@@ -156,6 +163,15 @@ module miraifs::file {
         let chunk_hash = cap.register_chunk_cap_hash();
         let chunk_size = cap.register_chunk_cap_size();
         
+        emit(
+            ChunkRegisteredEvent {
+                chunk_id: chunk_id,
+                chunk_index: cap.register_chunk_cap_index(),
+                chunk_hash: chunk_hash,
+                file_id: file.id(),
+            }
+        );
+
         file.chunks.partitions.get_mut(&chunk_hash).fill(chunk_id);
         file.size = file.size + chunk_size;
         cap.drop_register_chunk_cap();
@@ -184,7 +200,7 @@ module miraifs::file {
             i = i + 1;
         };
         
-        assert!(calculate_hash(&concat_chunk_hashes_bytes) == file.chunks.digest, EVerificationHashMismatch);
+        assert!(calculate_hash(&concat_chunk_hashes_bytes) == file.chunks.hash, EVerificationHashMismatch);
 
         let VerifyFileCap {
             file_id: _,
@@ -203,10 +219,10 @@ module miraifs::file {
         file.chunks.count
     }
 
-    public fun chunks_digest(
+    public fun chunks_hash(
         file: &File,
     ): vector<u8> {
-        file.chunks.digest
+        file.chunks.hash
     }
 
     public fun chunks_partitions(

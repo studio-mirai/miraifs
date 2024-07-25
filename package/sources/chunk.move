@@ -1,5 +1,6 @@
 module miraifs::chunk {
-
+    
+    use sui::event::{emit};
     use miraifs::utils::{calculate_chunk_identifier_hash, calculate_hash};
 
     public struct Chunk has key, store {
@@ -21,12 +22,26 @@ module miraifs::chunk {
         id: UID,
         chunk_id: ID,
         hash: vector<u8>,
+        index: u16,
         size: u32,
     }
 
     public struct VerifyChunkCap {
         chunk_id: ID,
         file_id: ID,
+    }
+
+    public struct ChunkCreatedEvent has copy, drop {
+        chunk_id: ID,
+        chunk_index: u16,
+        chunk_hash: vector<u8>,
+        file_id: ID,
+    }
+
+    public struct ChunkVerifiedEvent has copy, drop {
+        chunk_id: ID,
+        file_id: ID,
+        register_chunk_cap_id: ID,
     }
 
     const EChunkHashMismatch: u64 = 1;
@@ -43,6 +58,15 @@ module miraifs::chunk {
             index: cap.index,
             size: 0,
         };
+
+        emit(
+            ChunkCreatedEvent {
+                chunk_id: chunk.id(),
+                chunk_index: chunk.index,
+                chunk_hash: chunk.hash,
+                file_id: cap.file_id,
+            }
+        );
 
         let verify_chunk_cap = VerifyChunkCap {
             chunk_id: object::id(&chunk),
@@ -86,8 +110,17 @@ module miraifs::chunk {
             id: object::new(ctx),
             chunk_id: object::id(&chunk),
             hash: chunk.hash,
+            index: chunk.index,
             size: chunk.size,
-        }; 
+        };
+
+        emit(
+            ChunkVerifiedEvent {
+                chunk_id: chunk.id(),
+                file_id: cap.file_id,
+                register_chunk_cap_id: register_chunk_cap.register_chunk_cap_id(),
+            }
+        );
 
         transfer::public_transfer(chunk, cap.file_id.to_address());
         transfer::public_transfer(register_chunk_cap, cap.file_id.to_address());
@@ -134,6 +167,12 @@ module miraifs::chunk {
         cap: &RegisterChunkCap,
     ): ID {
         cap.chunk_id
+    }
+
+    public fun register_chunk_cap_index(
+        cap: &RegisterChunkCap,
+    ): u16 {
+        cap.index
     }
 
     public fun register_chunk_cap_hash(
@@ -199,6 +238,7 @@ module miraifs::chunk {
             id,
             chunk_id: _,
             hash: _,
+            index: _,
             size: _,
         } = cap;
         
