@@ -1,16 +1,16 @@
-from miraifs_sdk.utils import to_mist
 from pydantic import BaseModel
 from pysui import SuiConfig, SyncClient, handle_result
 from pysui.sui.sui_builders.get_builders import GetCoins, GetObjectsOwnedByAddress
 from pysui.sui.sui_txn.sync_transaction import SuiTransaction
 from pysui.sui.sui_txresults.complex_tx import TxResponse
-from pysui.sui.sui_txresults.single_tx import AddressOwner, ObjectRead, SuiCoinObjects
+from pysui.sui.sui_txresults.single_tx import (
+    AddressOwner,
+    ObjectRead,
+    ObjectReadPage,
+    SuiCoinObjects,
+)
 from pysui.sui.sui_types import ObjectID, SuiAddress
-
-
-class GasCoin(BaseModel):
-    id: str
-    balance: int
+from miraifs_sdk.models import GasCoin
 
 
 class Sui:
@@ -20,13 +20,14 @@ class Sui:
 
     def get_all_gas_coins(
         self,
+        address: SuiAddress,
     ) -> list[GasCoin]:
         all_gas_coins: list[GasCoin] = []
 
         cursor = None
         while True:
             builder = GetCoins(
-                owner=self.config.active_address,
+                owner=address,
                 limit=50,
                 cursor=cursor,
             )
@@ -74,8 +75,8 @@ class Sui:
         )
 
         coins = txer.split_coin(
-            coin=ObjectID(coin.id),
-            amounts=[to_mist(value) for _ in range(quantity)],
+            coin=txer.gas,
+            amounts=[value for _ in range(quantity)],
         )
 
         txer.transfer_objects(
@@ -83,7 +84,11 @@ class Sui:
             recipient=self.config.active_address,
         )
 
-        result = handle_result(txer.execute())
+        result = handle_result(
+            txer.execute(
+                use_gas_object=ObjectID(coin.id),
+            )
+        )
 
         if isinstance(result, TxResponse):
             coins: list[GasCoin] = []
@@ -97,10 +102,12 @@ class Sui:
 
         return coins
 
+    from rich import print
+
     def merge_coins(
         self,
         coins: list[GasCoin],
-    ):
+    ) -> GasCoin:
         txer = SuiTransaction(
             client=self.client,
             compress_inputs=True,
@@ -108,20 +115,9 @@ class Sui:
 
         gas_coin = coins.pop(0)
 
-        coin_to_merge_to = txer.move_call(
-            target="0x2::coin::zero",
-            arguments=[],
-            type_arguments=["0x2::sui::SUI"],
-        )
-
         txer.merge_coins(
-            merge_to=coin_to_merge_to,
+            merge_to=txer.gas,
             merge_from=[ObjectID(coin.id) for coin in coins],
-        )
-
-        txer.transfer_objects(
-            transfers=[coin_to_merge_to],
-            recipient=self.config.active_address,
         )
 
         result = handle_result(
@@ -130,7 +126,10 @@ class Sui:
             ),
         )
 
-        return result
+        if isinstance(result, TxResponse):
+            pass
+
+        return gas_coin
 
     def get_owner_address(
         self,
@@ -155,7 +154,7 @@ class Sui:
         show_content: bool = False,
         show_bcs: bool = False,
         show_storage_rebate: bool = False,
-    ) -> list[str]:
+    ) -> list[ObjectRead]:
         filter = {
             "filter": {
                 "StructType": struct_type,
@@ -181,15 +180,11 @@ class Sui:
                 cursor=cursor,
                 limit=50,
             )
-            result = self.client.execute(builder)
-
-            if result.is_ok():
-                objects = result.result_data.data
-                if len(objects) > 0:
-                    all_objects.extend(objects)
-
-            if result.result_data.has_next_page is True:
-                cursor = result.result_data.next_cursor
+            result = handle_result(self.client.execute(builder))
+            if isinstance(result, ObjectReadPage):
+                all_objects.extend(result.data)
+            if result.has_next_page is True:
+                cursor = result.next_cursor
             else:
                 break
 

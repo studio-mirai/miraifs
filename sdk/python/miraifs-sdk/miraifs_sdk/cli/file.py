@@ -2,7 +2,7 @@ import json
 import logging
 from hashlib import blake2b
 from pathlib import Path
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import magic
 import typer
 from miraifs_sdk import DOWNLOADS_DIR, MAX_CHUNK_SIZE_BYTES, MIRAIFS_PACKAGE_ID
@@ -19,6 +19,7 @@ from pysui.sui.sui_txn.sync_transaction import SuiTransaction
 from pysui.sui.sui_txresults.complex_tx import TxResponse
 from pysui.sui.sui_types import ObjectID, SuiString, SuiU8, SuiU32
 from rich import print
+from miraifs_sdk.utils import to_mist
 
 app = typer.Typer()
 
@@ -63,10 +64,15 @@ def calculate_file_verification_hash(
 
 
 @app.command()
-def create_chunks(
+def upload(
     file_id: str = typer.Argument(),
     path: Path = typer.Argument(),
+    concurrency: int = typer.Option(16),
+    gas_budget_per_chunk: int = typer.Option(3, help="Gas budget per chunk in SUI."),
 ):
+    import time
+
+    start_time = time.time()
     mfs = MiraiFs()
     file = mfs.get_file(file_id)
 
@@ -77,31 +83,66 @@ def create_chunks(
 
     total_cost = 0
     create_chunk_caps = mfs.get_create_chunk_caps(file.id)
-    for create_chunk_cap in create_chunk_caps:
-        result = mfs.create_chunk(
-            create_chunk_cap,
-            chunks_by_hash[bytes(create_chunk_cap.hash)],
-        )
-        if isinstance(result, TxResponse):
-            print(f"Uploaded Chunk #{create_chunk_cap.index}: {result.effects.transaction_digest}")  # fmt: skip
-            computation_cost = int(result.effects.gas_used.computation_cost)
-            storage_cost = int(result.effects.gas_used.storage_cost)
-            total_cost = total_cost + computation_cost + storage_cost
-        else:
-            raise Exception(f"Unable to upload Chunk #{create_chunk_cap.index}")
+
+    gas_coins = mfs.get_all_gas_coins(mfs.config.active_address)
+    if len(gas_coins) > 1:
+        merged_gas_coin = mfs.merge_coins(gas_coins)
+    else:
+        merged_gas_coin = gas_coins[0]
+    split_gas_coins = mfs.split_coin(
+        merged_gas_coin,
+        len(create_chunk_caps),
+        to_mist(gas_budget_per_chunk),
+    )
+
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = []
+        for create_chunk_cap, gas_coin in zip(create_chunk_caps, split_gas_coins):
+            future = executor.submit(
+                mfs.create_chunk,
+                create_chunk_cap,
+                chunks_by_hash[bytes(create_chunk_cap.hash)],
+                gas_coin,
+            )
+            futures.append(future)
+
+        for future in as_completed(futures):
+            result = future.result()
+            if isinstance(result, TxResponse):
+                computation_cost = int(result.effects.gas_used.computation_cost)
+                storage_cost = int(result.effects.gas_used.storage_cost)
+                total_cost = total_cost + computation_cost + storage_cost
 
     print(f"Total Cost: {total_cost} MIST ({total_cost / 10**9} SUI)")
+    end_time = time.time()
+    print(f"Execution Time: {end_time - start_time}s")
+
+    print("\nRun the command below to register file chunks.")
+    print(f"mfs file register {file_id}")
 
 
 @app.command()
-def register_chunks(
+def freeze(
     file_id: str = typer.Argument(),
 ):
     mfs = MiraiFs()
-    file_obj = mfs.get_file(file_id)
-    register_chunk_caps = mfs.get_register_chunk_caps(file_obj)
-    result = mfs.register_chunks(file_obj, register_chunk_caps)
+    file = mfs.get_file(file_id)
+    result = mfs.freeze_file(file)
     print(result)
+    return
+
+
+@app.command()
+def register(
+    file_id: str = typer.Argument(),
+):
+    mfs = MiraiFs()
+    file = mfs.get_file(file_id)
+    register_chunk_caps = mfs.get_register_chunk_caps(file)
+    result = mfs.register_chunks(file, register_chunk_caps)
+    print(result)
+    print("\nRun the command below to download the file.")
+    print(f"mfs file download {file_id}")
     return
 
 
@@ -168,14 +209,17 @@ def create(
         txer.execute(gas_budget=5_000_000_000),
     )
     if isinstance(result, TxResponse):
-        print(f"Computation Cost: {int(result.effects.gas_used.computation_cost) / 10**9} SUI")  # fmt: skip
-        print(f"Storage Cost: {int(result.effects.gas_used.storage_cost) / 10**9} SUI")  # fmt: skip
-        print(f"Storage Rebate: {int(result.effects.gas_used.storage_rebate) / 10**9} SUI")  # fmt: skip
-        for event in result.events:
-            if event.event_type == f"{MIRAIFS_PACKAGE_ID}::file::FileCreatedEvent":
-                file_id = json.loads(event.parsed_json.replace("'", '"'))["file_id"]
-                print("\nRun the command below to upload file chunks to MiraiFS.")
-                print(f"mfs file create-chunks {file_id} {path}")
+        if result.effects.status.status == "success":
+            print(f"Computation Cost: {int(result.effects.gas_used.computation_cost) / 10**9} SUI")  # fmt: skip
+            print(f"Storage Cost: {int(result.effects.gas_used.storage_cost) / 10**9} SUI")  # fmt: skip
+            print(f"Storage Rebate: {int(result.effects.gas_used.storage_rebate) / 10**9} SUI")  # fmt: skip
+            for event in result.events:
+                if event.event_type == f"{MIRAIFS_PACKAGE_ID}::file::FileCreatedEvent":
+                    file_id = json.loads(event.parsed_json.replace("'", '"'))["file_id"]
+                    print("\nRun the command below to upload file chunks to MiraiFS.")
+                    print(f"mfs file upload {file_id} {path}")
+        else:
+            print(result.effects.status.error)
     return
 
 
@@ -184,8 +228,8 @@ def delete(
     file_id: str = typer.Argument(),
 ):
     mfs = MiraiFs()
-    file_obj = mfs.get_file(file_id)
-    result = mfs.delete_file(file_obj)
+    file = mfs.get_file(file_id)
+    result = mfs.delete_file(file)
     print(result)
     return
 
@@ -196,8 +240,8 @@ def view(
     convert_hashes: bool = typer.Option(True),
 ):
     mfs = MiraiFs()
-    file_obj = mfs.get_file(file_id)
-    print(file_obj)
+    file = mfs.get_file(file_id)
+    print(file)
     return
 
 

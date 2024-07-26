@@ -14,7 +14,7 @@ module miraifs::file {
     use sui::vec_map::{Self, VecMap};
 
     use miraifs::chunk::{Self, Chunk, CreateChunkCap, RegisterChunkCap};
-    use miraifs::utils::{calculate_hash};
+    use miraifs::utils::{calculate_hash, render_b64_svg_image};
 
     const MAX_CHUNK_SIZE_BYTES: u32 = 128_000;
 
@@ -31,14 +31,15 @@ module miraifs::file {
         chunks: FileChunks,
         created_at: u64,
         extension: String,
+        image: String,
         mime_type: String,
-        size: u32,
+        size: u64,
     }
 
     public struct FileChunks has store {
         count: u32,
         hash: vector<u8>,
-        partitions: VecMap<vector<u8>, Option<ID>>,
+        manifest: VecMap<vector<u8>, Option<ID>>,
         size: u32
     }
 
@@ -72,9 +73,10 @@ module miraifs::file {
         display.add(b"created_at".to_string(), b"{created_at}".to_string());
         display.add(b"extension".to_string(), b"{extension}".to_string());
         display.add(b"file_size".to_string(), b"{size}".to_string());
-        display.add(b"image_url".to_string(), b"https://img.sm.xyz/{id}/".to_string());
+        display.add(b"image_url".to_string(), b"data:image/svg+xml;base64,{image}".to_string());
         display.add(b"mime_type".to_string(), b"{mime_type}".to_string());
         display.add(b"miraifs_uri".to_string(), b"miraifs://{id}".to_string());
+        display.update_version();
 
         transfer::public_transfer(display, ctx.sender());
         transfer::public_transfer(publisher, ctx.sender());
@@ -93,14 +95,14 @@ module miraifs::file {
         let create_chunk_cap = chunk::new_create_chunk_cap(
             object::id(file),
             hash,
-            (file.chunks.partitions.size() as u16),
+            (file.chunks.manifest.size() as u16),
             ctx,
         );
 
         let create_chunk_cap_ids: &mut VecMap<vector<u8>, ID> = dynamic_field::borrow_mut(&mut file.id, b"create_chunk_cap_ids");
         create_chunk_cap_ids.insert(hash, object::id(&create_chunk_cap));
         
-        file.chunks.partitions.insert(
+        file.chunks.manifest.insert(
             hash,
             option::none(),
         );
@@ -111,7 +113,7 @@ module miraifs::file {
     public fun destroy_empty(
         file: File,
     ) {
-        assert!(file.chunks.partitions.is_empty(), EChunksNotDeleted);
+        assert!(file.chunks.manifest.is_empty(), EChunksNotDeleted);
 
         let File {
             id,
@@ -121,8 +123,8 @@ module miraifs::file {
 
         id.delete();
         
-        let FileChunks {partitions, ..} = chunks;
-        partitions.destroy_empty();
+        let FileChunks {manifest, ..} = chunks;
+        manifest.destroy_empty();
     }
 
     public fun new(
@@ -139,7 +141,7 @@ module miraifs::file {
         let file_chunks = FileChunks {
             count: 0,
             hash: chunks_hash,
-            partitions: vec_map::empty(),
+            manifest: vec_map::empty(),
             size: chunk_size,
         };
 
@@ -148,11 +150,12 @@ module miraifs::file {
             chunks: file_chunks,
             created_at: clock.timestamp_ms(),
             extension: extension,
+            image: b"".to_string(),
             mime_type: mime_type,
             size: 0,
         };
 
-        dynamic_field::add(&mut file.id, b"create_chunk_cap_ids", vector<ID>[]);
+        dynamic_field::add(&mut file.id, b"create_chunk_cap_ids", vec_map::empty<vector<u8>, ID>());
 
         let verify_file_cap = VerifyFileCap {
             file_id: file.id.to_inner(),
@@ -184,9 +187,13 @@ module miraifs::file {
         let create_chunk_cap_ids_mut: &mut VecMap<vector<u8>, ID> = dynamic_field::borrow_mut(&mut file.id, b"create_chunk_cap_ids");
         create_chunk_cap_ids_mut.remove(&chunk_hash);
 
+        file.chunks.manifest.get_mut(&chunk_hash).fill(chunk_id);
+        file.size = file.size + (chunk_size as u64);
+
         if (create_chunk_cap_ids_mut.is_empty()) {
             let create_chunk_cap_ids: VecMap<vector<u8>, ID> = dynamic_field::remove(&mut file.id, b"create_chunk_cap_ids");
             create_chunk_cap_ids.destroy_empty();
+            file.image = render_b64_svg_image(file.mime_type, file.size);
         };
         
         emit(
@@ -198,17 +205,15 @@ module miraifs::file {
             }
         );
 
-        file.chunks.partitions.get_mut(&chunk_hash).fill(chunk_id);
-        file.size = file.size + chunk_size;
         cap.drop_register_chunk_cap();
     }
 
-    public fun receive_and_delete_chunk(
+    public fun receive_and_drop_chunk(
         file: &mut File,
         chunk_to_receive: Receiving<Chunk>,
     ) {
         let chunk = transfer::public_receive(&mut file.id, chunk_to_receive);
-        file.chunks.partitions.remove(&chunk.hash());
+        file.chunks.manifest.remove(&chunk.hash());
         chunk.drop();
     }
 
@@ -220,15 +225,15 @@ module miraifs::file {
 
         let mut concat_chunk_hashes_bytes: vector<u8> = vector[];
         let mut i = 0;
-        while (i < file.chunks.partitions.size()) {
-            let (chunk_hash, _) = file.chunks.partitions.get_entry_by_idx(i);
+        while (i < file.chunks.manifest.size()) {
+            let (chunk_hash, _) = file.chunks.manifest.get_entry_by_idx(i);
             concat_chunk_hashes_bytes.append(*chunk_hash);
             i = i + 1;
         };
         
         assert!(calculate_hash(&concat_chunk_hashes_bytes) == file.chunks.hash, EVerificationHashMismatch);
 
-        file.chunks.count = file.chunks.partitions.size() as u32;
+        file.chunks.count = file.chunks.manifest.size() as u32;
 
         let VerifyFileCap {..} = cap;
     }
@@ -251,10 +256,10 @@ module miraifs::file {
         file.chunks.hash
     }
 
-    public fun chunks_partitions(
+    public fun chunks_manifest(
         file: &File,
     ): VecMap<vector<u8>, Option<ID>> {
-        file.chunks.partitions
+        file.chunks.manifest
     }
 
     public fun created_at(
@@ -277,7 +282,7 @@ module miraifs::file {
 
     public fun size(
         file: &File,
-    ): u32 {
+    ): u64 {
         file.size
     }
 }

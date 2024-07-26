@@ -5,14 +5,13 @@ from pysui import handle_result
 from pysui.sui.sui_builders.get_builders import (
     GetDynamicFieldObject,
     GetMultipleObjects,
-    GetObjectsOwnedByAddress,
 )
 from datetime import datetime, UTC
-from pysui.sui.sui_txn.sync_transaction import SuiTransaction
-from pysui.sui.sui_txresults.single_tx import ObjectRead, ObjectReadPage
+from pysui.sui.sui_txn.sync_transaction import SuiTransaction, SuiRpcResult
+from pysui.sui.sui_txresults.single_tx import ObjectRead
+from pysui.sui.sui_txresults.complex_tx import TxResponse
 from pysui.sui.sui_types import (
     ObjectID,
-    SuiAddress,
     SuiString,
     SuiU8,
     SuiU64,
@@ -20,12 +19,13 @@ from pysui.sui.sui_types import (
 )
 from miraifs_sdk.models import (
     File,
-    FileChunkPartition,
+    FileChunkManifestItem,
     FileChunks,
     Chunk,
     CreateChunkCap,
     RegisterChunkCap,
     ChunkRaw,
+    GasCoin,
 )
 
 
@@ -48,7 +48,7 @@ class MiraiFs(Sui):
         self,
         file: File,
         register_chunk_caps: list[RegisterChunkCap],
-    ):
+    ) -> TxResponse:
         txer = SuiTransaction(
             client=self.client,
             merge_gas_budget=True,
@@ -70,7 +70,9 @@ class MiraiFs(Sui):
         self,
         create_chunk_cap: CreateChunkCap,
         chunk: ChunkRaw,
-    ):
+        gas_coin: GasCoin,
+    ) -> TxResponse:
+        print(f"Creating chunk {create_chunk_cap.index} with Gas Coin {gas_coin.id}...")
         txer = SuiTransaction(
             client=self.client,
             merge_gas_budget=True,
@@ -98,7 +100,10 @@ class MiraiFs(Sui):
             ],
         )
         result = handle_result(
-            txer.execute(gas_budget=5_000_000_000),
+            txer.execute(
+                gas_budget=gas_coin.balance,
+                use_gas_object=ObjectID(gas_coin.id),
+            ),
         )
         return result
 
@@ -107,7 +112,7 @@ class MiraiFs(Sui):
         chunk_hashes: list[int],
         chunk_lengths: list[int],
         mime_type: str,
-    ):
+    ) -> TxResponse:
         txer = SuiTransaction(
             client=self.client,
             merge_gas_budget=True,
@@ -147,21 +152,21 @@ class MiraiFs(Sui):
     def delete_file(
         self,
         file: File,
-    ):
+    ) -> TxResponse:
         txer = SuiTransaction(
             client=self.client,
             merge_gas_budget=True,
         )
-        for chunk in file.chunks:
+        for item in file.chunks.manifest:
             txer.move_call(
-                target=f"{MIRAIFS_PACKAGE_ID}::file::receive_and_delete_chunk",
+                target=f"{MIRAIFS_PACKAGE_ID}::file::receive_and_drop_chunk",
                 arguments=[
                     ObjectID(file.id),
-                    ObjectID(chunk.value),
+                    ObjectID(item.id),
                 ],
             )
         txer.move_call(
-            target=f"{MIRAIFS_PACKAGE_ID}::file::delete",
+            target=f"{MIRAIFS_PACKAGE_ID}::file::destroy_empty",
             arguments=[
                 ObjectID(file.id),
             ],
@@ -175,7 +180,7 @@ class MiraiFs(Sui):
         self,
         file: File,
     ):
-        chunk_ids = [chunk.value for chunk in file.chunks.partitions]
+        chunk_ids = [chunk.id for chunk in file.chunks.manifest]
         builder = GetMultipleObjects(object_ids=[ObjectID(id) for id in chunk_ids])
         chunk_objs = handle_result(self.client.execute(builder))
         chunks: list[Chunk] = []
@@ -197,17 +202,18 @@ class MiraiFs(Sui):
         file_id: str,
     ) -> File:
         file_obj = handle_result(self.client.get_object(ObjectID(file_id)))
+        print(file_obj)
         if isinstance(file_obj, ObjectRead):
-            partitions: list[FileChunkPartition] = []
-            for p in file_obj.content.fields["chunks"]["fields"]["partitions"]["fields"]["contents"]:  # fmt: skip
-                partition = FileChunkPartition(
-                    key=p["fields"]["key"], value=p["fields"]["value"]
+            manifest: list[FileChunkManifestItem] = []
+            for p in file_obj.content.fields["chunks"]["fields"]["manifest"]["fields"]["contents"]:  # fmt: skip
+                partition = FileChunkManifestItem(
+                    hash=p["fields"]["key"], id=p["fields"]["value"]
                 )
-                partitions.append(partition)
+                manifest.append(partition)
             file_chunks = FileChunks(
                 count=file_obj.content.fields["chunks"]["fields"]["count"],
                 hash=file_obj.content.fields["chunks"]["fields"]["hash"],
-                partitions=partitions,
+                manifest=manifest,
                 size=file_obj.content.fields["chunks"]["fields"]["size"],
             )
             file = File(
@@ -219,6 +225,24 @@ class MiraiFs(Sui):
                 size=file_obj.content.fields["size"],
             )  # fmt: skip
         return file
+
+    def freeze_file(
+        self,
+        file: File,
+    ):
+        txer = SuiTransaction(
+            client=self.client,
+            merge_gas_budget=True,
+        )
+        txer.move_call(
+            target="0x2::transfer::public_freeze_object",
+            arguments=[ObjectID(file.id)],
+            type_arguments=[f"{MIRAIFS_PACKAGE_ID}::file::File"],
+        )
+        result = handle_result(
+            txer.execute(),
+        )
+        return result
 
     def get_create_chunk_caps(
         self,
@@ -258,10 +282,14 @@ class MiraiFs(Sui):
             )
         )
         if isinstance(create_chunk_cap_df_obj, ObjectRead):
+            create_chunk_cap_ids: list[str] = [
+                obj["fields"]["value"]
+                for obj in create_chunk_cap_df_obj.content.fields["value"]["fields"]["contents"] # fmt: skip
+            ]  # fmt: skip
             # Split create_chunk_cap_ids into lists of 50 IDs
             # because GetMultipleObjects accepts a maximum of 50 object IDs at a time.
             create_chunk_cap_id_buckets: list[list[str]] = split_lists_into_sublists(
-                create_chunk_cap_df_obj.content.fields["value"], 50
+                create_chunk_cap_ids, 50
             )
             for bucket in create_chunk_cap_id_buckets:
                 create_chunk_cap_objs_raw = handle_result(
@@ -286,78 +314,19 @@ class MiraiFs(Sui):
         self,
         file: File,
     ) -> list[RegisterChunkCap]:
-        query = {
-            "filter": {
-                "StructType": f"{MIRAIFS_PACKAGE_ID}::chunk::RegisterChunkCap",
-            },
-            "options": {
-                "showType": False,
-                "showOwner": False,
-                "showPreviousTransaction": False,
-                "showDisplay": False,
-                "showContent": True,
-                "showBcs": False,
-                "showStorageRebate": False,
-            },
-        }
-        builder = GetObjectsOwnedByAddress(
-            address=SuiAddress(file.id),
-            query=query,
+        objs = self.get_owned_objects(
+            address=SuiString(file.id),
+            struct_type=f"{MIRAIFS_PACKAGE_ID}::chunk::RegisterChunkCap",
+            show_content=True,
         )
-        register_chunk_cap_objs = handle_result(
-            self.client.execute(builder),
-        )
-        if isinstance(register_chunk_cap_objs, ObjectReadPage):
-            register_chunk_caps: list[RegisterChunkCap] = []
-            for obj in register_chunk_cap_objs.data:
-                if isinstance(obj, ObjectRead):
-                    register_chunk_cap = RegisterChunkCap(
-                        id=obj.object_id,
-                        chunk_id=obj.content.fields["chunk_id"],
-                        hash=obj.content.fields["hash"],
-                        size=obj.content.fields["size"],
-                    )
-                    register_chunk_caps.append(register_chunk_cap)
-
-            return register_chunk_caps
-        return
-
-    def get_chunk_objs(
-        self,
-        file: File,
-    ):
-        query = {
-            "filter": {
-                "StructType": f"{MIRAIFS_PACKAGE_ID}::chunk::Chunk",
-            },
-            "options": {
-                "showType": False,
-                "showOwner": False,
-                "showPreviousTransaction": False,
-                "showDisplay": False,
-                "showContent": True,
-                "showBcs": False,
-                "showStorageRebate": False,
-            },
-        }
-        builder = GetObjectsOwnedByAddress(
-            address=SuiAddress(file.id),
-            query=query,
-        )
-        chunk_cap_objs_raw = handle_result(
-            self.client.execute(builder),
-        )
-        if isinstance(chunk_cap_objs_raw, ObjectReadPage):
-            chunk_cap_objs: list[Chunk] = []
-            for obj in chunk_cap_objs_raw.data:
-                if isinstance(obj, ObjectRead):
-                    chunk_obj = Chunk(
-                        id=obj.object_id,
-                        data=obj.content.fields["data"],
-                        index=obj.content.fields["index"],
-                        hash=obj.content.fields["hash"],
-                        size=obj.content.fields["size"],
-                    )
-                    chunk_cap_objs.append(chunk_obj)
-
-            return chunk_cap_objs
+        register_chunk_caps: list[RegisterChunkCap] = []
+        for obj in objs:
+            if isinstance(obj, ObjectRead):
+                register_chunk_cap = RegisterChunkCap(
+                    id=obj.object_id,
+                    chunk_id=obj.content.fields["chunk_id"],
+                    hash=obj.content.fields["hash"],
+                    size=obj.content.fields["size"],
+                )
+                register_chunk_caps.append(register_chunk_cap)
+        return register_chunk_caps

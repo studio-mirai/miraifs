@@ -3,15 +3,15 @@ from typing import Optional
 from datetime import datetime
 
 
-class FileChunkPartition(BaseModel):
-    key: list[int]
-    value: Optional[str]
+class FileChunkManifestItem(BaseModel):
+    hash: list[int]
+    id: Optional[str]
 
 
 class FileChunks(BaseModel):
     count: int
     hash: list[int]
-    partitions: list[FileChunkPartition]
+    manifest: list[FileChunkManifestItem]
     size: int
 
 
@@ -50,3 +50,8 @@ class RegisterChunkCap(BaseModel):
     chunk_id: str
     hash: list[int]
     size: int
+
+
+class GasCoin(BaseModel):
+    id: str
+    balance: int

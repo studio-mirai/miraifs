@@ -62,6 +62,7 @@ module miraifs::chunk {
         display.add(b"hash".to_string(), b"{hash}".to_string());
         display.add(b"index".to_string(), b"{index}".to_string());
         display.add(b"size".to_string(), b"{size}".to_string());
+        display.update_version();
 
         transfer::public_transfer(display, ctx.sender());
         transfer::public_transfer(publisher, ctx.sender());
