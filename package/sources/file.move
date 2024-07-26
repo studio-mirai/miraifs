@@ -6,8 +6,10 @@ module miraifs::file {
     use std::string::{String};
 
     use sui::clock::{Clock};
-    use sui::dynamic_field::{Self as df};
+    use sui::display::{Self};
+    use sui::dynamic_field::{Self};
     use sui::event::{emit};
+    use sui::package::{Self};
     use sui::transfer::{Receiving};
     use sui::vec_map::{Self, VecMap};
 
@@ -22,6 +24,8 @@ module miraifs::file {
     const EMaxChunkSizeExceeded: u64 = 4;
     const EVerificationHashMismatch: u64 = 5;
     
+    public struct FILE has drop {}
+
     public struct File has key, store {
         id: UID,
         chunks: FileChunks,
@@ -57,6 +61,25 @@ module miraifs::file {
         file_id: ID,
     }
 
+    fun init(
+        otw: FILE,
+        ctx: &mut TxContext,
+    ) {
+        let publisher = package::claim(otw, ctx);
+        
+        let mut display = display::new<File>(&publisher, ctx);
+        display.add(b"chunk_count".to_string(), b"{chunks.count}".to_string());
+        display.add(b"created_at".to_string(), b"{created_at}".to_string());
+        display.add(b"extension".to_string(), b"{extension}".to_string());
+        display.add(b"file_size".to_string(), b"{size}".to_string());
+        display.add(b"image_url".to_string(), b"https://img.sm.xyz/{id}/".to_string());
+        display.add(b"mime_type".to_string(), b"{mime_type}".to_string());
+        display.add(b"miraifs_uri".to_string(), b"miraifs://{id}".to_string());
+
+        transfer::public_transfer(display, ctx.sender());
+        transfer::public_transfer(publisher, ctx.sender());
+    }
+
     public fun add_chunk_hash(
         verify_file_cap: &VerifyFileCap,
         file: &mut File,
@@ -74,8 +97,8 @@ module miraifs::file {
             ctx,
         );
 
-        let create_chunk_cap_ids: &mut vector<ID> = df::borrow_mut(&mut file.id, b"create_chunk_cap_ids");
-        create_chunk_cap_ids.push_back(object::id(&create_chunk_cap));
+        let create_chunk_cap_ids: &mut VecMap<vector<u8>, ID> = dynamic_field::borrow_mut(&mut file.id, b"create_chunk_cap_ids");
+        create_chunk_cap_ids.insert(hash, object::id(&create_chunk_cap));
         
         file.chunks.partitions.insert(
             hash,
@@ -129,7 +152,7 @@ module miraifs::file {
             size: 0,
         };
 
-        df::add(&mut file.id, b"create_chunk_cap_ids", vector<ID>[]);
+        dynamic_field::add(&mut file.id, b"create_chunk_cap_ids", vector<ID>[]);
 
         let verify_file_cap = VerifyFileCap {
             file_id: file.id.to_inner(),
@@ -152,10 +175,19 @@ module miraifs::file {
         file: &mut File,
         cap_to_receive: Receiving<RegisterChunkCap>,
     ) {
+        // TODO: Implement create_chunk_cap_ids df cleanup.
         let cap = transfer::public_receive(&mut file.id, cap_to_receive);
         let chunk_id = cap.register_chunk_cap_id();
         let chunk_hash = cap.register_chunk_cap_hash();
         let chunk_size = cap.register_chunk_cap_size();
+        
+        let create_chunk_cap_ids_mut: &mut VecMap<vector<u8>, ID> = dynamic_field::borrow_mut(&mut file.id, b"create_chunk_cap_ids");
+        create_chunk_cap_ids_mut.remove(&chunk_hash);
+
+        if (create_chunk_cap_ids_mut.is_empty()) {
+            let create_chunk_cap_ids: VecMap<vector<u8>, ID> = dynamic_field::remove(&mut file.id, b"create_chunk_cap_ids");
+            create_chunk_cap_ids.destroy_empty();
+        };
         
         emit(
             ChunkRegisteredEvent {

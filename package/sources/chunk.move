@@ -1,7 +1,12 @@
 module miraifs::chunk {
     
+    use sui::display::{Self};
     use sui::event::{emit};
+    use sui::package;
+
     use miraifs::utils::{calculate_chunk_identifier_hash, calculate_hash};
+
+    public struct CHUNK has drop {}
 
     public struct Chunk has key, store {
         id: UID,
@@ -47,6 +52,20 @@ module miraifs::chunk {
     const EChunkHashMismatch: u64 = 1;
     const EInvalidVerifyChunkCapForChunk: u64 = 2;
 
+    fun init(
+        otw: CHUNK,
+        ctx: &mut TxContext,
+    ) {
+        let publisher = package::claim(otw, ctx);
+
+        let mut display = display::new<Chunk>(&publisher, ctx);
+        display.add(b"hash".to_string(), b"{hash}".to_string());
+        display.add(b"index".to_string(), b"{index}".to_string());
+        display.add(b"size".to_string(), b"{size}".to_string());
+
+        transfer::public_transfer(display, ctx.sender());
+        transfer::public_transfer(publisher, ctx.sender());
+    }
     public fun new(
         cap: CreateChunkCap,
         ctx: &mut TxContext,
