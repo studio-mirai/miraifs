@@ -6,7 +6,6 @@ module miraifs::file {
     use std::string::{String};
 
     use sui::clock::{Clock};
-    use sui::display::{Self};
     use sui::dynamic_field::{Self};
     use sui::event::{emit};
     use sui::package::{Self};
@@ -14,7 +13,7 @@ module miraifs::file {
     use sui::vec_map::{Self, VecMap};
 
     use miraifs::chunk::{Self, Chunk, CreateChunkCap, RegisterChunkCap};
-    use miraifs::utils::{calculate_hash, render_b64_svg_image};
+    use miraifs::utils::{calculate_hash};
 
     const MAX_CHUNK_SIZE_BYTES: u32 = 128_000;
 
@@ -31,7 +30,6 @@ module miraifs::file {
         chunks: FileChunks,
         created_at: u64,
         extension: String,
-        image: String,
         mime_type: String,
         size: u64,
     }
@@ -67,18 +65,6 @@ module miraifs::file {
         ctx: &mut TxContext,
     ) {
         let publisher = package::claim(otw, ctx);
-        
-        let mut display = display::new<File>(&publisher, ctx);
-        display.add(b"chunk_count".to_string(), b"{chunks.count}".to_string());
-        display.add(b"created_at".to_string(), b"{created_at}".to_string());
-        display.add(b"extension".to_string(), b"{extension}".to_string());
-        display.add(b"file_size".to_string(), b"{size}".to_string());
-        display.add(b"image_url".to_string(), b"data:image/svg+xml;base64,{image}".to_string());
-        display.add(b"mime_type".to_string(), b"{mime_type}".to_string());
-        display.add(b"miraifs_uri".to_string(), b"miraifs://{id}".to_string());
-        display.update_version();
-
-        transfer::public_transfer(display, ctx.sender());
         transfer::public_transfer(publisher, ctx.sender());
     }
 
@@ -150,7 +136,6 @@ module miraifs::file {
             chunks: file_chunks,
             created_at: clock.timestamp_ms(),
             extension: extension,
-            image: b"".to_string(),
             mime_type: mime_type,
             size: 0,
         };
@@ -193,7 +178,6 @@ module miraifs::file {
         if (create_chunk_cap_ids_mut.is_empty()) {
             let create_chunk_cap_ids: VecMap<vector<u8>, ID> = dynamic_field::remove(&mut file.id, b"create_chunk_cap_ids");
             create_chunk_cap_ids.destroy_empty();
-            file.image = render_b64_svg_image(file.mime_type, file.size);
         };
         
         emit(
