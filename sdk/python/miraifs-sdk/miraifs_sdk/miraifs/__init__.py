@@ -1,87 +1,34 @@
-import json
-import logging
-from hashlib import blake2b
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import magic
-import typer
-from miraifs_sdk import DOWNLOADS_DIR, MAX_CHUNK_SIZE_BYTES, MIRAIFS_PACKAGE_ID
-from miraifs_sdk.miraifs import Chunk, MiraiFs
-from miraifs_sdk.models import ChunkRaw
-from miraifs_sdk.utils import (
-    calculate_hash,
-    chunk_data,
-    int_to_bytes,
-    estimate_upload_cost_in_mist,
-    calculate_file_verification_hash,
-    load_chunks,
+from datetime import UTC, datetime
+from pathlib import Path
+
+from miraifs_sdk import MIRAIFS_PACKAGE_ID
+from miraifs_sdk.miraifs.txb.chunk import create_chunk_txb, register_chunks_txb
+from miraifs_sdk.miraifs.txb.file import create_file_txb
+from miraifs_sdk.models import (
+    Chunk,
+    CreateChunkCap,
+    File,
+    FileChunkManifestItem,
+    FileChunks,
+    RegisterChunkCap,
 )
-from pysui import SuiConfig, SyncClient, handle_result
-from pysui.sui.sui_txn.sync_transaction import SuiTransaction
-from pysui.sui.sui_txresults.complex_tx import TxResponse
-from pysui.sui.sui_types import ObjectID, SuiString, SuiU8, SuiU32
-from rich import print
-from miraifs_sdk.utils import to_mist
 from miraifs_sdk.sui import Sui
-import base64
-import hashlib
-import subprocess
-from hashlib import blake2b
-from typing import Any
-from miraifs_sdk import MIRAIFS_PACKAGE_ID, MAX_CHUNK_SIZE_BYTES
-from miraifs_sdk.sui import Sui
-from miraifs_sdk.utils import split_lists_into_sublists
+from miraifs_sdk.utils import (
+    calculate_chunks_manifest_hash,
+    get_mime_type_for_file,
+    load_chunks,
+    parse_events,
+    split_lists_into_sublists,
+)
 from pysui import handle_result
 from pysui.sui.sui_builders.get_builders import (
     GetDynamicFieldObject,
     GetMultipleObjects,
 )
-from datetime import datetime, UTC
-from pysui.sui.sui_txn.sync_transaction import SuiTransaction
+from pysui.sui.sui_txresults.complex_tx import TxResponse
 from pysui.sui.sui_txresults.single_tx import ObjectRead
-from pysui.sui.sui_txresults.complex_tx import TxResponse
-from pysui.sui.sui_types import (
-    ObjectID,
-    SuiString,
-    SuiU8,
-    SuiU64,
-    SuiU256,
-)
-from miraifs_sdk.models import (
-    File,
-    FileChunkManifestItem,
-    FileChunks,
-    Chunk,
-    CreateChunkCap,
-    RegisterChunkCap,
-    ChunkRaw,
-    GasCoin,
-)
-from pathlib import Path
-import json
-import logging
-from hashlib import blake2b
-from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import magic
-import typer
-from miraifs_sdk import DOWNLOADS_DIR, MAX_CHUNK_SIZE_BYTES, MIRAIFS_PACKAGE_ID
-from miraifs_sdk.miraifs import Chunk, MiraiFs
-from miraifs_sdk.models import ChunkRaw
-from miraifs_sdk.utils import (
-    calculate_hash,
-    chunk_data,
-    int_to_bytes,
-    estimate_upload_cost_in_mist,
-)
-from pysui import SuiConfig, SyncClient, handle_result
-from pysui.sui.sui_txn.sync_transaction import SuiTransaction
-from pysui.sui.sui_txresults.complex_tx import TxResponse
-from pysui.sui.sui_types import ObjectID, SuiString, SuiU8, SuiU32
-from rich import print
-from miraifs_sdk.utils import to_mist
-from miraifs_sdk.miraifs.txb.file import create_file_txb
-import zstandard as zstd
+from pysui.sui.sui_types import ObjectID, SuiAddress, SuiString
 
 
 class MiraiFs(Sui):
@@ -91,15 +38,101 @@ class MiraiFs(Sui):
     # File Write Methods
 
     def create_file(
-        chunks: list[Chunk],
-        chunks_manifest_hash: list[int],
-        extension: str,
-        mime_type: str,
-    ):
-        create_file_txb(
-            chunk_hashes=chunks_manifest_hash,
+        self,
+        path: Path,
+        chunk_size: int,
+        recipient: SuiAddress,
+    ) -> tuple[File, Path]:
+        chunks = load_chunks(path, chunk_size)
+        chunks_manifest_hash = calculate_chunks_manifest_hash(chunks)
+
+        result = create_file_txb(
+            chunk_size=chunk_size,
+            chunks=chunks,
+            chunks_manifest_hash=chunks_manifest_hash,
+            mime_type=get_mime_type_for_file(path),
+            recipient=recipient,
+            client=self.client,
         )
-        return
+
+        events = parse_events(result.events)
+
+        if len(events) == 0:
+            raise Exception(f"FAIL: {result.effects.transaction_digest}")
+
+        for event in events:
+            if event.event_type.endswith("FileCreatedEvent"):
+                file_id = event.event_data["file_id"]
+                file = self.get_file(file_id)
+                return file, path
+
+    def upload_chunks(
+        self,
+        file: File,
+        path: Path,
+        concurrency: int = 8,
+        gas_budget_per_chunk: int = 3_000_000_000,
+    ) -> File:
+        """
+        Uploads the chunks of a file to the MiraiFS network.
+
+        Args:
+            file (File): The file object to upload chunks for.
+            path (Path): The path to the file on disk.
+            concurrency (int, optional): The number of concurrent uploads to perform. Defaults to 8.
+            gas_budget_per_chunk (int, optional): The gas budget per chunk in MIST. Defaults to 3_000_000_000.
+        """
+        chunks = load_chunks(path, file.chunks.size)
+        chunks_by_hash = {bytes(chunk.hash): chunk for chunk in chunks}
+
+        create_chunk_caps = self.get_create_chunk_caps(file.id)
+        gas_coins = self.get_all_gas_coins(self.config.active_address)
+
+        if len(gas_coins) > 1:
+            merged_gas_coin = self.merge_coins(gas_coins)
+        else:
+            merged_gas_coin = gas_coins[0]
+
+        split_gas_coins = self.split_coin(
+            merged_gas_coin,
+            len(create_chunk_caps),
+            gas_budget_per_chunk,
+        )
+
+        transaction_digests: list[str] = []
+
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = []
+            for create_chunk_cap, gas_coin in zip(create_chunk_caps, split_gas_coins):
+                print(f"Creating chunk {create_chunk_cap.index} with gas coin {gas_coin.id}")  # fmt: skip
+                future = executor.submit(
+                    create_chunk_txb,
+                    create_chunk_cap,
+                    chunks_by_hash[bytes(create_chunk_cap.hash)],
+                    self.client,
+                    gas_coin,
+                )
+                futures.append(future)
+            for future in as_completed(futures):
+                result = future.result()
+                if isinstance(result, TxResponse):
+                    transaction_digests.append(result.effects.transaction_digest)
+                    events = parse_events(result.events)
+                    for event in events:
+                        if event.event_type.endswith("ChunkCreatedEvent"):
+                            chunk_id = event.event_data["chunk_id"]
+                            chunk_index = event.event_data["chunk_index"]
+                            print(f"Created chunk #{chunk_index}: {chunk_id}")
+
+        return file
+
+    def register_chunks(
+        self,
+        file: File,
+    ):
+        register_chunk_caps = self.get_register_chunk_caps(file)
+        result = register_chunks_txb(file, register_chunk_caps, self.client)
+        return result
 
     def get_chunks_for_file(
         self,
@@ -127,7 +160,6 @@ class MiraiFs(Sui):
         file_id: str,
     ) -> File:
         file_obj = handle_result(self.client.get_object(ObjectID(file_id)))
-        print(file_obj)
         if isinstance(file_obj, ObjectRead):
             manifest: list[FileChunkManifestItem] = []
             for p in file_obj.content.fields["chunks"]["fields"]["manifest"]["fields"]["contents"]:  # fmt: skip
@@ -145,7 +177,6 @@ class MiraiFs(Sui):
                 id=file_obj.object_id,
                 chunks=file_chunks,
                 created_at=datetime.fromtimestamp(int(file_obj.content.fields["created_at"]) / 1000, tz=UTC),
-                extension=file_obj.content.fields["extension"],
                 mime_type=file_obj.content.fields["mime_type"],
                 size=file_obj.content.fields["size"],
             )  # fmt: skip

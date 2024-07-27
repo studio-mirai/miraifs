@@ -29,7 +29,6 @@ module miraifs::file {
         id: UID,
         chunks: FileChunks,
         created_at: u64,
-        extension: String,
         mime_type: String,
         size: u64,
     }
@@ -115,7 +114,6 @@ module miraifs::file {
 
     public fun new(
         chunk_size: u32,
-        extension: String,
         mime_type: String,
         chunks_hash: vector<u8>,
         clock: &Clock,
@@ -135,7 +133,6 @@ module miraifs::file {
             id: object::new(ctx),
             chunks: file_chunks,
             created_at: clock.timestamp_ms(),
-            extension: extension,
             mime_type: mime_type,
             size: 0,
         };
@@ -250,12 +247,6 @@ module miraifs::file {
         file: &File,
     ): u64 {
         file.created_at
-    }
-
-    public fun extension(
-        file: &File,
-    ): String {
-        file.extension
     }
 
     public fun mime_type(

@@ -1,62 +1,24 @@
 import base64
 import hashlib
-import subprocess
-from hashlib import blake2b
-from typing import Any
-from miraifs_sdk import MIRAIFS_PACKAGE_ID, MAX_CHUNK_SIZE_BYTES
-from miraifs_sdk.sui import Sui
-from miraifs_sdk.utils import split_lists_into_sublists
-from pysui import handle_result
-from pysui.sui.sui_builders.get_builders import (
-    GetDynamicFieldObject,
-    GetMultipleObjects,
-)
-from datetime import datetime, UTC
-from pysui.sui.sui_txn.sync_transaction import SuiTransaction
-from pysui.sui.sui_txresults.single_tx import ObjectRead
-from pysui.sui.sui_txresults.complex_tx import TxResponse
-from pysui.sui.sui_types import (
-    ObjectID,
-    SuiString,
-    SuiU8,
-    SuiU64,
-    SuiU256,
-)
-from miraifs_sdk.models import (
-    File,
-    FileChunkManifestItem,
-    FileChunks,
-    Chunk,
-    CreateChunkCap,
-    RegisterChunkCap,
-    ChunkRaw,
-    GasCoin,
-)
-from pathlib import Path
 import json
 import logging
+import subprocess
 from hashlib import blake2b
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import magic
-import typer
-from miraifs_sdk import DOWNLOADS_DIR, MAX_CHUNK_SIZE_BYTES, MIRAIFS_PACKAGE_ID
-from miraifs_sdk.miraifs import Chunk, MiraiFs
-from miraifs_sdk.models import ChunkRaw
-from miraifs_sdk.utils import (
-    calculate_hash,
-    chunk_data,
-    int_to_bytes,
-    estimate_upload_cost_in_mist,
-)
-from pysui import SuiConfig, SyncClient, handle_result
-from pysui.sui.sui_txn.sync_transaction import SuiTransaction
-from pysui.sui.sui_txresults.complex_tx import TxResponse
-from pysui.sui.sui_types import ObjectID, SuiString, SuiU8, SuiU32
-from rich import print
-from miraifs_sdk.utils import to_mist
+from typing import Any
 
+import magic
 import zstandard as zstd
+from miraifs_sdk.models import Chunk, ChunkRaw, ParsedEvent
+from pysui.sui.sui_txresults.complex_tx import Event
+
+
+def get_mime_type_for_file(
+    path: Path,
+) -> str:
+    mime = magic.Magic(mime=True)
+    mime_type = str(mime.from_file(path))
+    return mime_type
 
 
 def calculate_unique_chunk_hash(
@@ -88,7 +50,7 @@ def load_chunks(
     return chunks
 
 
-def calculate_file_verification_hash(
+def calculate_chunks_manifest_hash(
     chunks: list[Chunk],
 ) -> blake2b:
     chunk_hashes = [chunk.hash for chunk in chunks]
@@ -247,3 +209,18 @@ def estimate_upload_cost_in_mist(
     byte_count: int,
 ) -> int:
     return byte_count * 21785
+
+
+def parse_events(
+    events: list[Event],
+) -> list[ParsedEvent]:
+    parsed_events: list[ParsedEvent] = []
+    for event in events:
+        parsed_events.append(
+            ParsedEvent(
+                package=event.package_id,
+                event_data=json.loads(event.parsed_json.replace("'", '"')),
+                event_type=event.event_type,
+            )
+        )
+    return parsed_events

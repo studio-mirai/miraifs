@@ -1,3 +1,4 @@
+from miraifs_sdk.models import GasCoin
 from pysui import SuiConfig, SyncClient, handle_result
 from pysui.sui.sui_builders.get_builders import GetCoins, GetObjectsOwnedByAddress
 from pysui.sui.sui_txn.sync_transaction import SuiTransaction
@@ -9,7 +10,6 @@ from pysui.sui.sui_txresults.single_tx import (
     SuiCoinObjects,
 )
 from pysui.sui.sui_types import ObjectID, SuiAddress
-from miraifs_sdk.models import GasCoin
 
 
 class Sui:

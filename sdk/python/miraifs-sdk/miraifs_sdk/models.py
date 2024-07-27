@@ -19,7 +19,6 @@ class File(BaseModel):
     id: str
     chunks: FileChunks
     created_at: datetime
-    extension: str
     mime_type: str
     size: int
 
@@ -55,3 +54,9 @@ class RegisterChunkCap(BaseModel):
 class GasCoin(BaseModel):
     id: str
     balance: int
+
+
+class ParsedEvent(BaseModel):
+    package: str
+    event_data: dict
+    event_type: str

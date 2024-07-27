@@ -1,20 +1,16 @@
+from hashlib import blake2b
 from miraifs_sdk import MIRAIFS_PACKAGE_ID
+from miraifs_sdk.models import Chunk, File
 from pysui import SyncClient, handle_result
 from pysui.sui.sui_txn.sync_transaction import SuiTransaction
 from pysui.sui.sui_txresults.complex_tx import TxResponse
-from pysui.sui.sui_types import (
-    ObjectID,
-    SuiString,
-    SuiU64,
-    SuiU256,
-    SuiAddress,
-)
-from miraifs_sdk.models import File
+from pysui.sui.sui_types import ObjectID, SuiAddress, SuiString, SuiU8, SuiU32
 
 
 def create_file_txb(
-    chunk_hashes: list[int],
-    chunk_lengths: list[int],
+    chunk_size: int,
+    chunks: list[Chunk],
+    chunks_manifest_hash: blake2b,
     mime_type: str,
     recipient: SuiAddress,
     client: SyncClient,
@@ -24,34 +20,44 @@ def create_file_txb(
         client=client,
         merge_gas_budget=True,
     )
-    chunk_hashes_vector = txer.make_move_vector(
-        items=[SuiU256(hash) for hash in chunk_hashes],
-        item_type="u256",
-    )
-    chunk_lengths_vector = txer.make_move_vector(
-        items=[SuiU64(length) for length in chunk_lengths],
-        item_type="u64",
-    )
-    file = txer.move_call(
+    file, verify_file_cap = txer.move_call(
         target=f"{MIRAIFS_PACKAGE_ID}::file::new",
         arguments=[
+            SuiU32(chunk_size),
             SuiString(mime_type),
-            SuiU64(len(chunk_hashes)),
+            [SuiU8(e) for e in list(chunks_manifest_hash.digest())],
+            ObjectID("0x6"),
         ],
     )
+    create_chunk_caps = []
+    for chunk in chunks:
+        create_chunk_cap = txer.move_call(
+            target=f"{MIRAIFS_PACKAGE_ID}::file::add_chunk_hash",
+            arguments=[
+                verify_file_cap,
+                file,
+                [SuiU8(e) for e in list(chunk.hash)],
+            ],
+        )
+        create_chunk_caps.append(create_chunk_cap)
+    txer.transfer_objects(
+        transfers=create_chunk_caps,
+        recipient=recipient,
+    )
     txer.move_call(
-        target=f"{MIRAIFS_PACKAGE_ID}::file::add_chunk_hashes",
+        target=f"{MIRAIFS_PACKAGE_ID}::file::verify",
         arguments=[
+            verify_file_cap,
             file,
-            chunk_hashes_vector,
-            chunk_lengths_vector,
         ],
     )
     txer.transfer_objects(
         transfers=[file],
         recipient=recipient,
     )
-    result = handle_result(txer.execute(gas_budget=gas_budget))
+    result = handle_result(
+        txer.execute(gas_budget=gas_budget),
+    )
     return result
 
 

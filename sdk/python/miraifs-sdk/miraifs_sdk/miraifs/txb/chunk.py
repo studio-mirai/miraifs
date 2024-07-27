@@ -33,7 +33,6 @@ def create_chunk_txb(
         client (SyncClient): The Sui client.
         gas_coin (GasCoin): The gas coin to use for the transaction.
     """
-    print(f"Creating chunk {create_chunk_cap.index} with Gas Coin {gas_coin.id}...")
     txer = SuiTransaction(
         client=client,
         merge_gas_budget=True,
