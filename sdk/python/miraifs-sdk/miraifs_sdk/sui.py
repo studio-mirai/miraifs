@@ -1,4 +1,3 @@
-from pydantic import BaseModel
 from pysui import SuiConfig, SyncClient, handle_result
 from pysui.sui.sui_builders.get_builders import GetCoins, GetObjectsOwnedByAddress
 from pysui.sui.sui_txn.sync_transaction import SuiTransaction

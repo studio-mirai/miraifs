@@ -3,8 +3,107 @@ import hashlib
 import subprocess
 from hashlib import blake2b
 from typing import Any
+from miraifs_sdk import MIRAIFS_PACKAGE_ID, MAX_CHUNK_SIZE_BYTES
+from miraifs_sdk.sui import Sui
+from miraifs_sdk.utils import split_lists_into_sublists
+from pysui import handle_result
+from pysui.sui.sui_builders.get_builders import (
+    GetDynamicFieldObject,
+    GetMultipleObjects,
+)
+from datetime import datetime, UTC
+from pysui.sui.sui_txn.sync_transaction import SuiTransaction
+from pysui.sui.sui_txresults.single_tx import ObjectRead
+from pysui.sui.sui_txresults.complex_tx import TxResponse
+from pysui.sui.sui_types import (
+    ObjectID,
+    SuiString,
+    SuiU8,
+    SuiU64,
+    SuiU256,
+)
+from miraifs_sdk.models import (
+    File,
+    FileChunkManifestItem,
+    FileChunks,
+    Chunk,
+    CreateChunkCap,
+    RegisterChunkCap,
+    ChunkRaw,
+    GasCoin,
+)
+from pathlib import Path
+import json
+import logging
+from hashlib import blake2b
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import magic
+import typer
+from miraifs_sdk import DOWNLOADS_DIR, MAX_CHUNK_SIZE_BYTES, MIRAIFS_PACKAGE_ID
+from miraifs_sdk.miraifs import Chunk, MiraiFs
+from miraifs_sdk.models import ChunkRaw
+from miraifs_sdk.utils import (
+    calculate_hash,
+    chunk_data,
+    int_to_bytes,
+    estimate_upload_cost_in_mist,
+)
+from pysui import SuiConfig, SyncClient, handle_result
+from pysui.sui.sui_txn.sync_transaction import SuiTransaction
+from pysui.sui.sui_txresults.complex_tx import TxResponse
+from pysui.sui.sui_types import ObjectID, SuiString, SuiU8, SuiU32
+from rich import print
+from miraifs_sdk.utils import to_mist
 
 import zstandard as zstd
+
+
+def calculate_unique_chunk_hash(
+    chunk_hash: bytes,
+    chunk_index: int,
+) -> blake2b:
+    chunk_index_bytes = b"\x00" + int_to_bytes(chunk_index)
+    logging.debug(f"Identifier Hash Input: {list(chunk_index_bytes + chunk_hash)}")
+    return calculate_hash(chunk_index_bytes + chunk_hash)
+
+
+def load_chunks(
+    path: Path,
+    chunk_size: int,
+) -> list[ChunkRaw]:
+    with open(path, "rb") as f:
+        data = f.read()
+    chunked_data = chunk_data(data, chunk_size)
+    chunks: list[ChunkRaw] = []
+    for i, data_chunk in enumerate(chunked_data):
+        chunk_data_hash = calculate_hash(data_chunk).digest()
+        chunk_identifier_hash = calculate_unique_chunk_hash(chunk_data_hash, i).digest()
+        chunk = ChunkRaw(
+            data=list(data_chunk),
+            hash=list(chunk_identifier_hash),
+            index=i,
+        )
+        chunks.append(chunk)
+    return chunks
+
+
+def calculate_file_verification_hash(
+    chunks: list[Chunk],
+) -> blake2b:
+    chunk_hashes = [chunk.hash for chunk in chunks]
+    return calculate_hash(b"".join([bytes(hash) for hash in chunk_hashes]))
+
+
+def split_list(
+    input_list: list[int],
+) -> list[list[int]]:
+    main_sublists = []
+    for i in range(0, len(input_list), 10000):
+        chunk = input_list[i : i + 10000]
+        sublists = [chunk[j : j + 500] for j in range(0, len(chunk), 500)]
+        main_sublists.append(sublists)
+    return main_sublists
 
 
 def get_zstd_version():

@@ -12,7 +12,9 @@ from miraifs_sdk.utils import (
     calculate_hash,
     chunk_data,
     int_to_bytes,
+    calculate_file_verification_hash,
     estimate_upload_cost_in_mist,
+    load_chunks,
 )
 from pysui import SuiConfig, SyncClient, handle_result
 from pysui.sui.sui_txn.sync_transaction import SuiTransaction
@@ -27,42 +29,6 @@ config = SuiConfig.default_config()
 client = SyncClient(config)
 
 
-def calculate_unique_chunk_hash(
-    chunk_hash: bytes,
-    chunk_index: int,
-) -> blake2b:
-    chunk_index_bytes = b"\x00" + int_to_bytes(chunk_index)
-    logging.debug(f"Identifier Hash Input: {list(chunk_index_bytes + chunk_hash)}")
-    return calculate_hash(chunk_index_bytes + chunk_hash)
-
-
-def load_chunks(
-    path: Path,
-    chunk_size: int,
-) -> list[ChunkRaw]:
-    with open(path, "rb") as f:
-        data = f.read()
-    chunked_data = chunk_data(data, chunk_size)
-    chunks: list[ChunkRaw] = []
-    for i, data_chunk in enumerate(chunked_data):
-        chunk_data_hash = calculate_hash(data_chunk).digest()
-        chunk_identifier_hash = calculate_unique_chunk_hash(chunk_data_hash, i).digest()
-        chunk = ChunkRaw(
-            data=list(data_chunk),
-            hash=list(chunk_identifier_hash),
-            index=i,
-        )
-        chunks.append(chunk)
-    return chunks
-
-
-def calculate_file_verification_hash(
-    chunks: list[Chunk],
-) -> blake2b:
-    chunk_hashes = [chunk.hash for chunk in chunks]
-    return calculate_hash(b"".join([bytes(hash) for hash in chunk_hashes]))
-
-
 @app.command()
 def upload(
     file_id: str = typer.Argument(),
@@ -70,9 +36,6 @@ def upload(
     concurrency: int = typer.Option(16),
     gas_budget_per_chunk: int = typer.Option(3, help="Gas budget per chunk in SUI."),
 ):
-    import time
-
-    start_time = time.time()
     mfs = MiraiFs()
     file = mfs.get_file(file_id)
 
@@ -114,9 +77,6 @@ def upload(
                 total_cost = total_cost + computation_cost + storage_cost
 
     print(f"Total Cost: {total_cost} MIST ({total_cost / 10**9} SUI)")
-    end_time = time.time()
-    print(f"Execution Time: {end_time - start_time}s")
-
     print("\nRun the command below to register file chunks.")
     print(f"mfs file register {file_id}")
 

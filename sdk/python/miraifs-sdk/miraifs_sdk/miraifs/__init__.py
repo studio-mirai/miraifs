@@ -1,4 +1,34 @@
-from miraifs_sdk import MIRAIFS_PACKAGE_ID
+import json
+import logging
+from hashlib import blake2b
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import magic
+import typer
+from miraifs_sdk import DOWNLOADS_DIR, MAX_CHUNK_SIZE_BYTES, MIRAIFS_PACKAGE_ID
+from miraifs_sdk.miraifs import Chunk, MiraiFs
+from miraifs_sdk.models import ChunkRaw
+from miraifs_sdk.utils import (
+    calculate_hash,
+    chunk_data,
+    int_to_bytes,
+    estimate_upload_cost_in_mist,
+    calculate_file_verification_hash,
+    load_chunks,
+)
+from pysui import SuiConfig, SyncClient, handle_result
+from pysui.sui.sui_txn.sync_transaction import SuiTransaction
+from pysui.sui.sui_txresults.complex_tx import TxResponse
+from pysui.sui.sui_types import ObjectID, SuiString, SuiU8, SuiU32
+from rich import print
+from miraifs_sdk.utils import to_mist
+from miraifs_sdk.sui import Sui
+import base64
+import hashlib
+import subprocess
+from hashlib import blake2b
+from typing import Any
+from miraifs_sdk import MIRAIFS_PACKAGE_ID, MAX_CHUNK_SIZE_BYTES
 from miraifs_sdk.sui import Sui
 from miraifs_sdk.utils import split_lists_into_sublists
 from pysui import handle_result
@@ -7,7 +37,7 @@ from pysui.sui.sui_builders.get_builders import (
     GetMultipleObjects,
 )
 from datetime import datetime, UTC
-from pysui.sui.sui_txn.sync_transaction import SuiTransaction, SuiRpcResult
+from pysui.sui.sui_txn.sync_transaction import SuiTransaction
 from pysui.sui.sui_txresults.single_tx import ObjectRead
 from pysui.sui.sui_txresults.complex_tx import TxResponse
 from pysui.sui.sui_types import (
@@ -27,154 +57,49 @@ from miraifs_sdk.models import (
     ChunkRaw,
     GasCoin,
 )
-
-
-def split_list(
-    input_list: list[int],
-) -> list[list[int]]:
-    main_sublists = []
-    for i in range(0, len(input_list), 10000):
-        chunk = input_list[i : i + 10000]
-        sublists = [chunk[j : j + 500] for j in range(0, len(chunk), 500)]
-        main_sublists.append(sublists)
-    return main_sublists
+from pathlib import Path
+import json
+import logging
+from hashlib import blake2b
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import magic
+import typer
+from miraifs_sdk import DOWNLOADS_DIR, MAX_CHUNK_SIZE_BYTES, MIRAIFS_PACKAGE_ID
+from miraifs_sdk.miraifs import Chunk, MiraiFs
+from miraifs_sdk.models import ChunkRaw
+from miraifs_sdk.utils import (
+    calculate_hash,
+    chunk_data,
+    int_to_bytes,
+    estimate_upload_cost_in_mist,
+)
+from pysui import SuiConfig, SyncClient, handle_result
+from pysui.sui.sui_txn.sync_transaction import SuiTransaction
+from pysui.sui.sui_txresults.complex_tx import TxResponse
+from pysui.sui.sui_types import ObjectID, SuiString, SuiU8, SuiU32
+from rich import print
+from miraifs_sdk.utils import to_mist
+from miraifs_sdk.miraifs.txb.file import create_file_txb
+import zstandard as zstd
 
 
 class MiraiFs(Sui):
     def __init__(self) -> None:
         super().__init__()
 
-    def register_chunks(
-        self,
-        file: File,
-        register_chunk_caps: list[RegisterChunkCap],
-    ) -> TxResponse:
-        txer = SuiTransaction(
-            client=self.client,
-            merge_gas_budget=True,
-        )
-        for cap in register_chunk_caps:
-            txer.move_call(
-                target=f"{MIRAIFS_PACKAGE_ID}::file::receive_and_register_chunk",
-                arguments=[
-                    ObjectID(file.id),
-                    ObjectID(cap.id),
-                ],
-            )
-        result = handle_result(
-            txer.execute(gas_budget=5_000_000_000),
-        )
-        return result
-
-    def create_chunk(
-        self,
-        create_chunk_cap: CreateChunkCap,
-        chunk: ChunkRaw,
-        gas_coin: GasCoin,
-    ) -> TxResponse:
-        print(f"Creating chunk {create_chunk_cap.index} with Gas Coin {gas_coin.id}...")
-        txer = SuiTransaction(
-            client=self.client,
-            merge_gas_budget=True,
-        )
-        chunk_arg, verify_chunk_cap_arg = txer.move_call(
-            target=f"{MIRAIFS_PACKAGE_ID}::chunk::new",
-            arguments=[ObjectID(create_chunk_cap.id)],
-        )
-        for bucket in split_list(chunk.data):
-            vec = [[SuiU8(n) for n in subbucket] for subbucket in bucket]
-            # Reverse the chunks because the add_data() function in the smart contract uses pop_back() instead of remove(0).
-            vec.reverse()
-            txer.move_call(
-                target=f"{MIRAIFS_PACKAGE_ID}::chunk::add_data",
-                arguments=[
-                    chunk_arg,
-                    vec,
-                ],
-            )
-        txer.move_call(
-            target=f"{MIRAIFS_PACKAGE_ID}::chunk::verify",
-            arguments=[
-                verify_chunk_cap_arg,
-                chunk_arg,
-            ],
-        )
-        result = handle_result(
-            txer.execute(
-                gas_budget=gas_coin.balance,
-                use_gas_object=ObjectID(gas_coin.id),
-            ),
-        )
-        return result
+    # File Write Methods
 
     def create_file(
-        self,
-        chunk_hashes: list[int],
-        chunk_lengths: list[int],
+        chunks: list[Chunk],
+        chunks_manifest_hash: list[int],
+        extension: str,
         mime_type: str,
-    ) -> TxResponse:
-        txer = SuiTransaction(
-            client=self.client,
-            merge_gas_budget=True,
+    ):
+        create_file_txb(
+            chunk_hashes=chunks_manifest_hash,
         )
-        chunk_hashes_vector = txer.make_move_vector(
-            items=[SuiU256(hash) for hash in chunk_hashes],
-            item_type="u256",
-        )
-        chunk_lengths_vector = txer.make_move_vector(
-            items=[SuiU64(length) for length in chunk_lengths],
-            item_type="u64",
-        )
-        file = txer.move_call(
-            target=f"{MIRAIFS_PACKAGE_ID}::file::new",
-            arguments=[
-                SuiString(mime_type),
-                SuiU64(len(chunk_hashes)),
-            ],
-        )
-        txer.move_call(
-            target=f"{MIRAIFS_PACKAGE_ID}::file::add_chunk_hashes",
-            arguments=[
-                file,
-                chunk_hashes_vector,
-                chunk_lengths_vector,
-            ],
-        )
-        txer.transfer_objects(
-            transfers=[file],
-            recipient=self.config.active_address,
-        )
-        result = handle_result(
-            txer.execute(),
-        )
-        return result
-
-    def delete_file(
-        self,
-        file: File,
-    ) -> TxResponse:
-        txer = SuiTransaction(
-            client=self.client,
-            merge_gas_budget=True,
-        )
-        for item in file.chunks.manifest:
-            txer.move_call(
-                target=f"{MIRAIFS_PACKAGE_ID}::file::receive_and_drop_chunk",
-                arguments=[
-                    ObjectID(file.id),
-                    ObjectID(item.id),
-                ],
-            )
-        txer.move_call(
-            target=f"{MIRAIFS_PACKAGE_ID}::file::destroy_empty",
-            arguments=[
-                ObjectID(file.id),
-            ],
-        )
-        result = handle_result(
-            txer.execute(),
-        )
-        return result
+        return
 
     def get_chunks_for_file(
         self,
@@ -225,24 +150,6 @@ class MiraiFs(Sui):
                 size=file_obj.content.fields["size"],
             )  # fmt: skip
         return file
-
-    def freeze_file(
-        self,
-        file: File,
-    ):
-        txer = SuiTransaction(
-            client=self.client,
-            merge_gas_budget=True,
-        )
-        txer.move_call(
-            target="0x2::transfer::public_freeze_object",
-            arguments=[ObjectID(file.id)],
-            type_arguments=[f"{MIRAIFS_PACKAGE_ID}::file::File"],
-        )
-        result = handle_result(
-            txer.execute(),
-        )
-        return result
 
     def get_create_chunk_caps(
         self,
