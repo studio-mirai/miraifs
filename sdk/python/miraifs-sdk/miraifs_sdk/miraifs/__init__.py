@@ -11,6 +11,7 @@ from miraifs_sdk.models import (
     File,
     FileChunkManifestItem,
     FileChunks,
+    GasCoin,
     RegisterChunkCap,
 )
 from miraifs_sdk.sui import Sui
@@ -40,10 +41,11 @@ class MiraiFs(Sui):
     def create_file(
         self,
         path: Path,
+        chunks: list[Chunk],
         chunk_size: int,
         recipient: SuiAddress,
+        gas_coin: GasCoin,
     ) -> tuple[File, Path]:
-        chunks = load_chunks(path, chunk_size)
         chunks_manifest_hash = calculate_chunks_manifest_hash(chunks)
 
         result = create_file_txb(
@@ -53,6 +55,7 @@ class MiraiFs(Sui):
             mime_type=get_mime_type_for_file(path),
             recipient=recipient,
             client=self.client,
+            gas_coin=gas_coin,
         )
 
         events = parse_events(result.events)
@@ -70,8 +73,8 @@ class MiraiFs(Sui):
         self,
         file: File,
         path: Path,
-        concurrency: int = 8,
-        gas_budget_per_chunk: int = 3_000_000_000,
+        concurrency: int,
+        gas_coins: list[GasCoin],
     ) -> File:
         """
         Uploads the chunks of a file to the MiraiFS network.
@@ -86,24 +89,11 @@ class MiraiFs(Sui):
         chunks_by_hash = {bytes(chunk.hash): chunk for chunk in chunks}
 
         create_chunk_caps = self.get_create_chunk_caps(file.id)
-        gas_coins = self.get_all_gas_coins(self.config.active_address)
-
-        if len(gas_coins) > 1:
-            merged_gas_coin = self.merge_coins(gas_coins)
-        else:
-            merged_gas_coin = gas_coins[0]
-
-        split_gas_coins = self.split_coin(
-            merged_gas_coin,
-            len(create_chunk_caps),
-            gas_budget_per_chunk,
-        )
 
         transaction_digests: list[str] = []
-
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
             futures = []
-            for create_chunk_cap, gas_coin in zip(create_chunk_caps, split_gas_coins):
+            for create_chunk_cap, gas_coin in zip(create_chunk_caps, gas_coins):
                 print(f"Creating chunk {create_chunk_cap.index} with gas coin {gas_coin.id}")  # fmt: skip
                 future = executor.submit(
                     create_chunk_txb,
@@ -121,17 +111,22 @@ class MiraiFs(Sui):
                     for event in events:
                         if event.event_type.endswith("ChunkCreatedEvent"):
                             chunk_id = event.event_data["chunk_id"]
-                            chunk_index = event.event_data["chunk_index"]
-                            print(f"Created chunk #{chunk_index}: {chunk_id}")
+                            print(f"Created chunk {chunk_id}: {result.effects.transaction_digest}")  # fmt: skip
 
         return file
 
     def register_chunks(
         self,
         file: File,
+        gas_coin: GasCoin,
     ):
         register_chunk_caps = self.get_register_chunk_caps(file)
-        result = register_chunks_txb(file, register_chunk_caps, self.client)
+        result = register_chunks_txb(
+            file,
+            register_chunk_caps,
+            self.client,
+            gas_coin,
+        )
         return result
 
     def get_chunks_for_file(

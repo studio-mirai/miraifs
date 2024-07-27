@@ -3,6 +3,7 @@ from pathlib import Path
 import typer
 from miraifs_sdk import DOWNLOADS_DIR, MAX_CHUNK_SIZE_BYTES
 from miraifs_sdk.miraifs import MiraiFs
+from miraifs_sdk.utils import load_chunks, calculate_chunks_manifest_hash
 from pysui import SuiConfig, SyncClient
 from pysui.sui.sui_types import SuiAddress
 from rich import print
@@ -18,34 +19,62 @@ def upload(
     path: Path = typer.Argument(...),
     chunk_size: int = typer.Option(MAX_CHUNK_SIZE_BYTES),
     recipient: str = typer.Option(None),
-):
-    print(f"File Path: {path}")
-    print(f"Chunk Size: {chunk_size}")
-    if recipient:
-        print(f"File Recipient: {recipient}")
-    typer.confirm("Please confirm the upload settings:", abort=True)
-
+    concurrency: int = typer.Option(16),
+    gas_budget_per_chunk: int = typer.Option(3_000_000_000, help="Gas budget per chunk in MIST"),
+):  # fmt: skip
     mfs = MiraiFs()
+
+    chunks = load_chunks(path, chunk_size)
+
+    gas_coins = mfs.allocate_gas_coins(
+        # Add two more gas coins, one for create_file, one fore register_chunks.
+        len(chunks) + 2,
+        gas_budget_per_chunk,
+    )
+
+    if len(gas_coins) != len(chunks) + 2:
+        raise typer.Exit(f"Unable to allocate {len(chunks) + 2} gas coins.")
 
     if recipient:
         recipient = SuiAddress(recipient)
     if not recipient:
         recipient = mfs.config.active_address
 
+    print(f"File Path: {path}")
+    print(f"Chunk Size: {chunk_size}")
+    print(f"File Recipient: {recipient}")
+    print(f"Upload Concurrency: {concurrency}")
+    print(f"Gas Budget Per Chunk: {gas_budget_per_chunk / 10**9} SUI")
+    typer.confirm("Please confirm the upload settings:", abort=True)
+
     print("Creating file...")
     file, path = mfs.create_file(
         path,
+        chunks,
         chunk_size,
         recipient=recipient,
+        gas_coin=gas_coins.pop(0),
     )
 
     print(f"Uploading chunks for file {file.id}")
-    mfs.upload_chunks(file, path)
+    mfs.upload_chunks(
+        file,
+        path,
+        concurrency,
+        [gas_coins.pop(0) for _ in range(len(chunks))],
+    )
     print(f"Registering chunks for file {file.id}")
-    mfs.register_chunks(file)
+    mfs.register_chunks(
+        file,
+        gas_coin=gas_coins.pop(0),
+    )
 
     file = mfs.get_file(file.id)
     print(file)
+
+    gas_coins = mfs.get_all_gas_coins(mfs.config.active_address)
+    print(gas_coins)
+    mfs.merge_coins(gas_coins)
 
     print("File was uploaded successfully!")
     print(f"Download Link: https://miraifs.sm.xyz/{file.id}/")

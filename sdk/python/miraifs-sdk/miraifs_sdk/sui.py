@@ -17,6 +17,22 @@ class Sui:
         self.config = SuiConfig.default_config()
         self.client = SyncClient(self.config)
 
+    def allocate_gas_coins(
+        self,
+        quantity: int,
+        value: int,
+    ) -> list[GasCoin]:
+        gas_coins = self.get_all_gas_coins(self.config.active_address)
+        merged_gas_coin = gas_coins[0]
+        if len(gas_coins) > 1:
+            merged_gas_coin = self.merge_coins(gas_coins)
+        split_gas_coins = self.split_coin(
+            merged_gas_coin,
+            quantity,
+            value,
+        )
+        return split_gas_coins
+
     def get_all_gas_coins(
         self,
         address: SuiAddress,
@@ -188,9 +204,3 @@ class Sui:
                 break
 
         return all_objects
-
-    def find_largest_gas_coin(
-        self,
-        coins: list[GasCoin],
-    ):
-        return max(coins, key=lambda coin: coin.balance)

@@ -1,6 +1,6 @@
 from hashlib import blake2b
 from miraifs_sdk import MIRAIFS_PACKAGE_ID
-from miraifs_sdk.models import Chunk, File
+from miraifs_sdk.models import Chunk, File, GasCoin
 from pysui import SyncClient, handle_result
 from pysui.sui.sui_txn.sync_transaction import SuiTransaction
 from pysui.sui.sui_txresults.complex_tx import TxResponse
@@ -14,7 +14,7 @@ def create_file_txb(
     mime_type: str,
     recipient: SuiAddress,
     client: SyncClient,
-    gas_budget: int = 2_000_000_000,
+    gas_coin: GasCoin,
 ) -> TxResponse:
     txer = SuiTransaction(
         client=client,
@@ -56,7 +56,10 @@ def create_file_txb(
         recipient=recipient,
     )
     result = handle_result(
-        txer.execute(gas_budget=gas_budget),
+        txer.execute(
+            gas_budget=gas_coin.balance,
+            use_gas_object=ObjectID(gas_coin.id),
+        ),
     )
     return result
 
@@ -64,7 +67,7 @@ def create_file_txb(
 def delete_file_txb(
     file: File,
     client: SyncClient,
-    gas_budget: int = 2_000_000_000,
+    gas_coin: GasCoin,
 ) -> TxResponse:
     txer = SuiTransaction(
         client=client,
@@ -84,14 +87,19 @@ def delete_file_txb(
             ObjectID(file.id),
         ],
     )
-    result = handle_result(txer.execute(gas_budget=gas_budget))
+    result = handle_result(
+        txer.execute(
+            gas_budget=gas_coin.balance,
+            use_gas_object=ObjectID(gas_coin.id),
+        ),
+    )
     return result
 
 
 def freeze_file_txb(
     file: File,
     client: SyncClient,
-    gas_budget: int = 1_000_000_000,
+    gas_coin: GasCoin,
 ):
     txer = SuiTransaction(
         client=client,
@@ -102,5 +110,10 @@ def freeze_file_txb(
         arguments=[ObjectID(file.id)],
         type_arguments=[f"{MIRAIFS_PACKAGE_ID}::file::File"],
     )
-    result = handle_result(txer.execute(gas_budget=gas_budget))
+    result = handle_result(
+        txer.execute(
+            gas_budget=gas_coin.balance,
+            use_gas_object=ObjectID(gas_coin.id),
+        ),
+    )
     return result

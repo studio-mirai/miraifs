@@ -72,7 +72,7 @@ def register_chunks_txb(
     file: File,
     register_chunk_caps: list[RegisterChunkCap],
     client: SyncClient,
-    gas_budget: int = 2_000_000_000,
+    gas_coin: GasCoin,
 ) -> TxResponse:
     txer = SuiTransaction(
         client=client,
@@ -86,6 +86,9 @@ def register_chunks_txb(
             ],
         )
     result = handle_result(
-        txer.execute(gas_budget=gas_budget),
+        txer.execute(
+            gas_budget=gas_coin.balance,
+            use_gas_object=ObjectID(gas_coin.id),
+        ),
     )
     return result
