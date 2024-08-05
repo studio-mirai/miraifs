@@ -10,7 +10,7 @@ Suitable use cases for MiraiFS include:
 
 ## How it Works
 
-MiraiFS uses two primary object types in a parent-child relationship to store data onchain. A parent `File` object owns one or more `Chunk` child objects that contain up to 128,000 bytes (125KB) of data. The 125KB data limit was specifically chosen to allow for a chunk to be created and verified within a single programmable transaction block, which has a maximum size of 137KB.
+MiraiFS uses two primary object types in a parent-child relationship to store data onchain. A parent `File` object owns one or more `Chunk` child objects that contain up to 128,000 bytes (125KB) of data. The 125KB data limit was specifically chosen to allow for a chunk to be created and verified within a single [programmable transaction block](https://docs.sui.io/concepts/transactions/prog-txn-blocks), which has a maximum size of 137KB.
 
 ```
 public struct File has key, store {
