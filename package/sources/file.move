@@ -27,16 +27,16 @@ module miraifs::file {
 
     public struct File has key, store {
         id: UID,
-        chunks: FileChunks,
+        manifest: Manifest,
         created_at: u64,
         mime_type: String,
         size: u64,
     }
 
-    public struct FileChunks has store {
+    public struct Manifest has store {
         count: u32,
         hash: vector<u8>,
-        manifest: VecMap<vector<u8>, Option<ID>>,
+        chunks: VecMap<vector<u8>, Option<ID>>,
         size: u32
     }
 
@@ -80,14 +80,14 @@ module miraifs::file {
         let create_chunk_cap = chunk::new_create_chunk_cap(
             object::id(file),
             hash,
-            (file.chunks.manifest.size() as u16),
+            (file.manifest.chunks.size() as u16),
             ctx,
         );
 
         let create_chunk_cap_ids: &mut VecMap<vector<u8>, ID> = dynamic_field::borrow_mut(&mut file.id, b"create_chunk_cap_ids");
         create_chunk_cap_ids.insert(hash, object::id(&create_chunk_cap));
         
-        file.chunks.manifest.insert(
+        file.manifest.chunks.insert(
             hash,
             option::none(),
         );
@@ -98,18 +98,18 @@ module miraifs::file {
     public fun destroy_empty(
         file: File,
     ) {
-        assert!(file.chunks.manifest.is_empty(), EChunksNotDeleted);
+        assert!(file.manifest.chunks.is_empty(), EChunksNotDeleted);
 
         let File {
             id,
-            chunks,
+            manifest,
             ..
         } = file;
 
         id.delete();
         
-        let FileChunks {manifest, ..} = chunks;
-        manifest.destroy_empty();
+        let Manifest {chunks, ..} = manifest;
+        chunks.destroy_empty();
     }
 
     public fun new(
@@ -122,16 +122,16 @@ module miraifs::file {
         assert!(chunk_size <= MAX_CHUNK_SIZE_BYTES, EMaxChunkSizeExceeded);
         assert!(chunks_hash.length() == 32, EInvalidHashLength);
 
-        let file_chunks = FileChunks {
+        let manifest = Manifest {
             count: 0,
             hash: chunks_hash,
-            manifest: vec_map::empty(),
+            chunks: vec_map::empty(),
             size: chunk_size,
         };
 
         let mut file = File {
             id: object::new(ctx),
-            chunks: file_chunks,
+            manifest: manifest,
             created_at: clock.timestamp_ms(),
             mime_type: mime_type,
             size: 0,
@@ -149,7 +149,7 @@ module miraifs::file {
                 created_at: file.created_at,
                 file_id: file.id.to_inner(),
                 mime_type: file.mime_type,
-                chunks_hash: file.chunks.hash,
+                chunks_hash: file.manifest.hash,
             }
         );
 
@@ -169,7 +169,7 @@ module miraifs::file {
         let create_chunk_cap_ids_mut: &mut VecMap<vector<u8>, ID> = dynamic_field::borrow_mut(&mut file.id, b"create_chunk_cap_ids");
         create_chunk_cap_ids_mut.remove(&chunk_hash);
 
-        file.chunks.manifest.get_mut(&chunk_hash).fill(chunk_id);
+        file.manifest.chunks.get_mut(&chunk_hash).fill(chunk_id);
         file.size = file.size + (chunk_size as u64);
 
         if (create_chunk_cap_ids_mut.is_empty()) {
@@ -194,7 +194,7 @@ module miraifs::file {
         chunk_to_receive: Receiving<Chunk>,
     ) {
         let chunk = transfer::public_receive(&mut file.id, chunk_to_receive);
-        file.chunks.manifest.remove(&chunk.hash());
+        file.manifest.chunks.remove(&chunk.hash());
         chunk.drop();
     }
 
@@ -206,15 +206,15 @@ module miraifs::file {
 
         let mut concat_chunk_hashes_bytes: vector<u8> = vector[];
         let mut i = 0;
-        while (i < file.chunks.manifest.size()) {
-            let (chunk_hash, _) = file.chunks.manifest.get_entry_by_idx(i);
+        while (i < file.manifest.chunks.size()) {
+            let (chunk_hash, _) = file.manifest.chunks.get_entry_by_idx(i);
             concat_chunk_hashes_bytes.append(*chunk_hash);
             i = i + 1;
         };
         
-        assert!(calculate_hash(&concat_chunk_hashes_bytes) == file.chunks.hash, EVerificationHashMismatch);
+        assert!(calculate_hash(&concat_chunk_hashes_bytes) == file.manifest.hash, EVerificationHashMismatch);
 
-        file.chunks.count = file.chunks.manifest.size() as u32;
+        file.manifest.count = file.manifest.chunks.size() as u32;
 
         let VerifyFileCap {..} = cap;
     }
@@ -228,19 +228,19 @@ module miraifs::file {
     public fun chunks_count(
         file: &File,
     ): u32 {
-        file.chunks.count
+        file.manifest.count
     }
 
     public fun chunks_hash(
         file: &File,
     ): vector<u8> {
-        file.chunks.hash
+        file.manifest.hash
     }
 
     public fun chunks_manifest(
         file: &File,
     ): VecMap<vector<u8>, Option<ID>> {
-        file.chunks.manifest
+        file.manifest.chunks
     }
 
     public fun created_at(
