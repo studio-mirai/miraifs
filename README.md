@@ -39,4 +39,5 @@ public struct Chunk has key, store {
 
 As you can see from the object types above, `File` objects don't wrap `Chunk` objects directly. Instead, MiraiFS leverages Sui's "transfer to object", and transfer `Chunk` objects directly to their parent `File` object upon creation. Links between `File` and `Chunk` objects are maintained by the `File` object's `Manifest` object, which maintains a directory of associated chunks by storing a mapping between each chunk's blake2b hash (`vector<u8>`) and its object ID (`Option<ID>`). This architecture removes the bottleneck of having to insert `Chunk` objects into a `File` object sequentially, and allows for full parallelization where multiple `Chunk` objects can be created and transferred to its parent `File` object concurrently.
 
-![parallelized-chunk-creation](https://github.com/user-attachments/assets/ad15ff34-9083-4374-a93c-946382b03ea3)
+![parallelized-chunk-creation](https://github.com/user-attachments/assets/5fb0297c-9c3a-4b5d-9ca6-09479db555f6)
+
