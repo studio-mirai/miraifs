@@ -177,6 +177,11 @@ class MiraiFs(Sui):
             )  # fmt: skip
         return file
 
+    def list_files(
+        self,
+    ):
+        return
+
     def get_create_chunk_caps(
         self,
         file_id: str,

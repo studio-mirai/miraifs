@@ -1,4 +1,5 @@
 import typer
+
 from miraifs_sdk.sui import Sui
 
 app = typer.Typer()

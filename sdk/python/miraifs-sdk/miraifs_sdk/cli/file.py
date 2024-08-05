@@ -1,12 +1,13 @@
 from pathlib import Path
 
 import typer
-from miraifs_sdk import DOWNLOADS_DIR, MAX_CHUNK_SIZE_BYTES
-from miraifs_sdk.miraifs import MiraiFs
-from miraifs_sdk.utils import load_chunks, calculate_chunks_manifest_hash
 from pysui import SuiConfig, SyncClient
 from pysui.sui.sui_types import SuiAddress
 from rich import print
+
+from miraifs_sdk import DOWNLOADS_DIR, MAX_CHUNK_SIZE_BYTES
+from miraifs_sdk.miraifs import MiraiFs
+from miraifs_sdk.utils import load_chunks
 
 app = typer.Typer()
 
@@ -110,6 +111,12 @@ def view(
     mfs = MiraiFs()
     file = mfs.get_file(file_id)
     print(file)
+    return
+
+
+@app.command()
+def list():
+    mfs = MiraiFs()
     return
 
 

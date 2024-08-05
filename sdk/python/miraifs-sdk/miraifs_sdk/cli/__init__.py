@@ -1,6 +1,6 @@
 import typer
-from miraifs_sdk.cli import file
-from miraifs_sdk.cli import gas
+
+from miraifs_sdk.cli import file, gas
 
 app = typer.Typer()
 
