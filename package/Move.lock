@@ -32,3 +32,9 @@ chain-id = "9346faee"
 original-published-id = "0x9b3ca4b832cb7a54d351b9d393ae9365543685d85b3524fbd40b92863c1139fd"
 latest-published-id = "0x9b3ca4b832cb7a54d351b9d393ae9365543685d85b3524fbd40b92863c1139fd"
 published-version = "1"
+
+[env.mirainet]
+chain-id = "8a81cbfb"
+original-published-id = "0xe55a2f09129935eb93a492a36b07213ef1280be961aaa27b3f91c44752f4e11e"
+latest-published-id = "0xe55a2f09129935eb93a492a36b07213ef1280be961aaa27b3f91c44752f4e11e"
+published-version = "1"
