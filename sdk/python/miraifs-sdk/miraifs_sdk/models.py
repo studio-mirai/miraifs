@@ -3,7 +3,7 @@ from typing import Optional
 from datetime import datetime
 
 
-class FileChunkManifestItem(BaseModel):
+class ManifestItem(BaseModel):
     hash: list[int]
     id: Optional[str]
 
@@ -11,7 +11,7 @@ class FileChunkManifestItem(BaseModel):
 class FileChunks(BaseModel):
     count: int
     hash: list[int]
-    manifest: list[FileChunkManifestItem]
+    manifest: list[ManifestItem]
     size: int
 
 

@@ -67,6 +67,7 @@ module miraifs::chunk {
         transfer::public_transfer(display, ctx.sender());
         transfer::public_transfer(publisher, ctx.sender());
     }
+
     public fun new(
         cap: CreateChunkCap,
         ctx: &mut TxContext,

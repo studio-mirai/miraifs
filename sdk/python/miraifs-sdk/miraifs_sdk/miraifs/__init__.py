@@ -9,7 +9,7 @@ from miraifs_sdk.models import (
     Chunk,
     CreateChunkCap,
     File,
-    FileChunkManifestItem,
+    ManifestItem,
     FileChunks,
     GasCoin,
     RegisterChunkCap,
@@ -156,17 +156,17 @@ class MiraiFs(Sui):
     ) -> File:
         file_obj = handle_result(self.client.get_object(ObjectID(file_id)))
         if isinstance(file_obj, ObjectRead):
-            manifest: list[FileChunkManifestItem] = []
-            for p in file_obj.content.fields["chunks"]["fields"]["manifest"]["fields"]["contents"]:  # fmt: skip
-                partition = FileChunkManifestItem(
+            manifest: list[ManifestItem] = []
+            for p in file_obj.content.fields["manifest"]["fields"]["chunks"]["fields"]["contents"]:  # fmt: skip
+                partition = ManifestItem(
                     hash=p["fields"]["key"], id=p["fields"]["value"]
                 )
                 manifest.append(partition)
             file_chunks = FileChunks(
-                count=file_obj.content.fields["chunks"]["fields"]["count"],
-                hash=file_obj.content.fields["chunks"]["fields"]["hash"],
+                count=file_obj.content.fields["manifest"]["fields"]["count"],
+                hash=file_obj.content.fields["manifest"]["fields"]["hash"],
                 manifest=manifest,
-                size=file_obj.content.fields["chunks"]["fields"]["size"],
+                size=file_obj.content.fields["manifest"]["fields"]["size"],
             )
             file = File(
                 id=file_obj.object_id,
