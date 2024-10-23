@@ -35,6 +35,6 @@ published-version = "1"
 
 [env.mirainet]
 chain-id = "8a81cbfb"
-original-published-id = "0xe55a2f09129935eb93a492a36b07213ef1280be961aaa27b3f91c44752f4e11e"
-latest-published-id = "0xe55a2f09129935eb93a492a36b07213ef1280be961aaa27b3f91c44752f4e11e"
+original-published-id = "0xb3c8e4c89b72a92fc7e3e6cba6b05d138c90bf88f008f6dbe70a49c2a3f352f8"
+latest-published-id = "0xb3c8e4c89b72a92fc7e3e6cba6b05d138c90bf88f008f6dbe70a49c2a3f352f8"
 published-version = "1"
