@@ -3,17 +3,15 @@
 
 module miraifs::file;
 
-use std::string::{String};
-
-use sui::clock::{Clock};
-use sui::dynamic_field::{Self};
-use sui::event::{emit};
-use sui::package::{Self};
-use sui::transfer::{Receiving};
-use sui::vec_map::{Self, VecMap};
-
 use miraifs::chunk::{Self, Chunk, CreateChunkCap, RegisterChunkCap};
-use miraifs::utils::{calculate_hash};
+use miraifs::utils::calculate_hash;
+use std::string::String;
+use sui::clock::Clock;
+use sui::dynamic_field;
+use sui::event::emit;
+use sui::package;
+use sui::transfer::Receiving;
+use sui::vec_map::{Self, VecMap};
 
 const MAX_CHUNK_SIZE_BYTES: u32 = 128_000;
 
@@ -22,7 +20,7 @@ const EInvalidHashLength: u64 = 2;
 const EInvalidVerifyFileCapForFile: u64 = 3;
 const EMaxChunkSizeExceeded: u64 = 4;
 const EVerificationHashMismatch: u64 = 5;
-    
+
 public struct FILE has drop {}
 
 public struct File has key, store {
@@ -37,7 +35,7 @@ public struct Manifest has store {
     count: u32,
     hash: vector<u8>,
     chunks: VecMap<vector<u8>, Option<ID>>,
-    size: u32
+    size: u32,
 }
 
 public struct VerifyFileCap {
@@ -59,10 +57,7 @@ public struct ChunkRegisteredEvent has copy, drop {
     file_id: ID,
 }
 
-fun init(
-    otw: FILE,
-    ctx: &mut TxContext,
-) {
+fun init(otw: FILE, ctx: &mut TxContext) {
     let publisher = package::claim(otw, ctx);
     transfer::public_transfer(publisher, ctx.sender());
 }
@@ -84,31 +79,35 @@ public fun add_chunk_hash(
         ctx,
     );
 
-    let create_chunk_cap_ids: &mut VecMap<vector<u8>, ID> = dynamic_field::borrow_mut(&mut file.id, b"create_chunk_cap_ids");
-    create_chunk_cap_ids.insert(hash, object::id(&create_chunk_cap));
-        
-    file.manifest.chunks.insert(
-        hash,
-        option::none(),
+    let create_chunk_cap_ids: &mut VecMap<vector<u8>, ID> = dynamic_field::borrow_mut(
+        &mut file.id,
+        b"create_chunk_cap_ids",
     );
+    create_chunk_cap_ids.insert(hash, object::id(&create_chunk_cap));
+
+    file
+        .manifest
+        .chunks
+        .insert(
+            hash,
+            option::none(),
+        );
 
     create_chunk_cap
 }
 
-public fun destroy_empty(
-    file: File,
-) {
+public fun destroy_empty(file: File) {
     assert!(file.manifest.chunks.is_empty(), EChunksNotDeleted);
 
     let File {
         id,
         manifest,
-        ..
+        ..,
     } = file;
 
     id.delete();
-        
-    let Manifest {chunks, ..} = manifest;
+
+    let Manifest { chunks, .. } = manifest;
     chunks.destroy_empty();
 }
 
@@ -143,15 +142,13 @@ public fun new(
         file_id: file.id.to_inner(),
     };
 
-    emit(
-        FileCreatedEvent {
-            chunk_size: chunk_size,
-            created_at: file.created_at,
-            file_id: file.id.to_inner(),
-            mime_type: file.mime_type,
-            chunks_hash: file.manifest.hash,
-        }
-    );
+    emit(FileCreatedEvent {
+        chunk_size: chunk_size,
+        created_at: file.created_at,
+        file_id: file.id.to_inner(),
+        mime_type: file.mime_type,
+        chunks_hash: file.manifest.hash,
+    });
 
     (file, verify_file_cap)
 }
@@ -165,43 +162,41 @@ public fun receive_and_register_chunk(
     let chunk_id = cap.register_chunk_cap_id();
     let chunk_hash = cap.register_chunk_cap_hash();
     let chunk_size = cap.register_chunk_cap_size();
-        
-    let create_chunk_cap_ids_mut: &mut VecMap<vector<u8>, ID> = dynamic_field::borrow_mut(&mut file.id, b"create_chunk_cap_ids");
+
+    let create_chunk_cap_ids_mut: &mut VecMap<vector<u8>, ID> = dynamic_field::borrow_mut(
+        &mut file.id,
+        b"create_chunk_cap_ids",
+    );
     create_chunk_cap_ids_mut.remove(&chunk_hash);
 
     file.manifest.chunks.get_mut(&chunk_hash).fill(chunk_id);
     file.size = file.size + (chunk_size as u64);
 
     if (create_chunk_cap_ids_mut.is_empty()) {
-        let create_chunk_cap_ids: VecMap<vector<u8>, ID> = dynamic_field::remove(&mut file.id, b"create_chunk_cap_ids");
+        let create_chunk_cap_ids: VecMap<vector<u8>, ID> = dynamic_field::remove(
+            &mut file.id,
+            b"create_chunk_cap_ids",
+        );
         create_chunk_cap_ids.destroy_empty();
     };
-        
-    emit(
-        ChunkRegisteredEvent {
-            chunk_id: chunk_id,
-            chunk_index: cap.register_chunk_cap_index(),
-            chunk_hash: chunk_hash,
-            file_id: file.id(),
-        }
-    );
+
+    emit(ChunkRegisteredEvent {
+        chunk_id: chunk_id,
+        chunk_index: cap.register_chunk_cap_index(),
+        chunk_hash: chunk_hash,
+        file_id: file.id(),
+    });
 
     cap.drop_register_chunk_cap();
 }
 
-public fun receive_and_drop_chunk(
-    file: &mut File,
-    chunk_to_receive: Receiving<Chunk>,
-) {
+public fun receive_and_drop_chunk(file: &mut File, chunk_to_receive: Receiving<Chunk>) {
     let chunk = transfer::public_receive(&mut file.id, chunk_to_receive);
     file.manifest.chunks.remove(&chunk.hash());
     chunk.drop();
 }
 
-public fun verify(
-    cap: VerifyFileCap,
-    file: &mut File,
-) {
+public fun verify(cap: VerifyFileCap, file: &mut File) {
     assert!(cap.file_id == object::id(file), EInvalidVerifyFileCapForFile);
 
     let mut concat_chunk_hashes_bytes: vector<u8> = vector[];
@@ -211,52 +206,41 @@ public fun verify(
         concat_chunk_hashes_bytes.append(*chunk_hash);
         i = i + 1;
     };
-    
-    assert!(calculate_hash(&concat_chunk_hashes_bytes) == file.manifest.hash, EVerificationHashMismatch);
+
+    assert!(
+        calculate_hash(&concat_chunk_hashes_bytes) == file.manifest.hash,
+        EVerificationHashMismatch,
+    );
 
     file.manifest.count = file.manifest.chunks.size() as u32;
 
-    let VerifyFileCap {..} = cap;
+    let VerifyFileCap { .. } = cap;
 }
 
-public fun id(
-    file: &File,
-): ID {
+public fun id(file: &File): ID {
     file.id.to_inner()
 }
 
-public fun chunks_count(
-    file: &File,
-): u32 {
+public fun chunks_count(file: &File): u32 {
     file.manifest.count
 }
 
-public fun chunks_hash(
-    file: &File,
-): vector<u8> {
+public fun chunks_hash(file: &File): vector<u8> {
     file.manifest.hash
 }
 
-public fun chunks_manifest(
-    file: &File,
-): VecMap<vector<u8>, Option<ID>> {
+public fun chunks_manifest(file: &File): VecMap<vector<u8>, Option<ID>> {
     file.manifest.chunks
 }
 
-public fun created_at(
-    file: &File,
-): u64 {
+public fun created_at(file: &File): u64 {
     file.created_at
 }
 
-public fun mime_type(
-    file: &File,
-): String {
+public fun mime_type(file: &File): String {
     file.mime_type
 }
 
-public fun size(
-    file: &File,
-): u64 {
+public fun size(file: &File): u64 {
     file.size
 }

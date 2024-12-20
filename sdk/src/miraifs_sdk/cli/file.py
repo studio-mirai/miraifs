@@ -71,7 +71,7 @@ def upload(
     chunk_size: int = typer.Option(MAX_CHUNK_SIZE_BYTES),
     recipient: str = typer.Option(None),
     concurrency: int = typer.Option(16),
-    gas_budget_per_chunk: int = typer.Option(3_000_000_000, help="Gas budget per chunk in MIST"),
+    gas_budget_per_chunk: int = typer.Option(5_000_000_000, help="Gas budget per chunk in MIST"),
 ):  # fmt: skip
     mfs = MiraiFs()
 

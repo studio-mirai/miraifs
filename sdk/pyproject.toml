@@ -1,0 +1,26 @@
+[project]
+name = "miraifs-sdk"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Brian Li", email = "brian@brianli.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "aioresult>=1.0",
+    "cryptography>=44.0.0",
+    "pydantic>=2.10.4",
+    "pysui>=0.73.0",
+    "python-dotenv>=1.0.1",
+    "python-magic>=0.4.27",
+    "typer>=0.15.1",
+    "zstandard>=0.23.0",
+]
+
+[project.scripts]
+mfs = "miraifs_sdk.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
